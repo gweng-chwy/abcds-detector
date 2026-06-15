@@ -181,6 +181,26 @@ detection.
 
 ## Architecture
 
+### Repository Setup
+
+Before implementation, point local development at the user's fork while keeping
+the original Google repository as upstream:
+
+```bash
+git remote rename origin upstream
+git remote add origin git@github.com:gweng-chwy/abcds-detector.git
+git checkout -b openai-llm-cli
+```
+
+Expected remotes after setup:
+
+```text
+origin   git@github.com:gweng-chwy/abcds-detector.git
+upstream git@github.com:google-marketing-solutions/abcds-detector.git
+```
+
+Implementation commits should land on `openai-llm-cli` and push to the fork.
+
 ### CLI Configuration
 
 Extend existing argparse config rather than replacing it. New args should map
