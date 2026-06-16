@@ -189,15 +189,17 @@ python main.py \
   --llm_provider OPENAI \
   --creative_provider_type LOCAL,YOUTUBE \
   --video_uris "sample_videos/google/videos/Youtube_sWaCTG60wPA_Never_run_out_of_the_food_they_love_Chewy.mp4" \
-  --brand_name "Chewy" \
-  --brand_variations "Chewy,chewy.com" \
-  --branded_products "Chewy Pharmacy,Autoship" \
-  --branded_products_categories "pet food,pet medication,pet supplies" \
-  --branded_call_to_actions "shop now,save now,order now" \
-  --run_long_form_abcd \
-  --run_shorts \
-  --assessment_file outputs/abcd_results.json
+  -brand_name "Chewy" \
+  -brand_variations "Chewy,chewy.com" \
+  -branded_products "Chewy Pharmacy,Autoship" \
+  -branded_products_categories "pet food,pet medication,pet supplies" \
+  -branded_call_to_actions "shop now,save now,order now" \
+  -run_long_form_abcd \
+  -run_shorts \
+  -assessment_file outputs/abcd_results.json
 ```
+
+YouTube URLs can also be included in `--video_uris`.
 
 Private sample videos should live outside git. This repository uses a local
 `sample_videos` symlink for manual testing.
