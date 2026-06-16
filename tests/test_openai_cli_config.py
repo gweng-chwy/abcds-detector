@@ -11,9 +11,9 @@ def test_openai_local_youtube_cli_config():
   args = utils.parse_args([
       "--llm_provider",
       "OPENAI",
-      "-video_uris",
-      "sample_videos/ad.mp4,https://www.youtube.com/watch?v=abc123",
-      "-creative_provider_type",
+      "--video_uris",
+      "sample_videos/ad.mp4,, https://www.youtube.com/watch?v=abc123",
+      "--creative_provider_type",
       "LOCAL,YOUTUBE",
       "--openai_model",
       "gpt-5.4-mini",
@@ -57,6 +57,7 @@ def test_default_cli_config_uses_gemini_gcs_and_safe_optional_values():
   assert config.creative_provider_types == [models.CreativeProviderType.GCS]
   assert config.knowledge_graph_api_key == ""
   assert config.features_to_evaluate == []
+  assert config.video_uris == []
   assert config.openai_model == "gpt-5.4-mini"
   assert config.openai_transcription_model == "gpt-4o-transcribe"
   assert config.cache_dir == ".cache/abcds-detector"
@@ -67,6 +68,45 @@ def test_default_cli_config_uses_gemini_gcs_and_safe_optional_values():
   assert config.llm_params.generation_config["max_output_tokens"] == 65535
   assert config.llm_params.generation_config["temperature"] == 1
   assert config.llm_params.generation_config["top_p"] == 0.95
+
+
+def test_blank_video_uris_are_ignored():
+  """Blank video URI values do not create truthy work lists."""
+  args = utils.parse_args(["--video_uris", " , ,, "])
+
+  config = utils.build_abcd_params_config(args)
+
+  assert config.video_uris == []
+
+
+def test_legacy_video_and_provider_aliases_still_parse():
+  """Legacy single-dash and short provider aliases remain supported."""
+  legacy_long_args = utils.parse_args([
+      "-video_uris",
+      "gs://bucket/video.mp4",
+      "-creative_provider_type",
+      "GCS",
+  ])
+  legacy_short_args = utils.parse_args([
+      "-vu",
+      "https://www.youtube.com/watch?v=abc123",
+      "-crpt",
+      "YOUTUBE",
+  ])
+
+  legacy_long_config = utils.build_abcd_params_config(legacy_long_args)
+  legacy_short_config = utils.build_abcd_params_config(legacy_short_args)
+
+  assert legacy_long_config.video_uris == ["gs://bucket/video.mp4"]
+  assert legacy_long_config.creative_provider_type == (
+      models.CreativeProviderType.GCS
+  )
+  assert legacy_short_config.video_uris == [
+      "https://www.youtube.com/watch?v=abc123"
+  ]
+  assert legacy_short_config.creative_provider_type == (
+      models.CreativeProviderType.YOUTUBE
+  )
 
 
 def test_openai_video_response_schema_wraps_feature_schema():

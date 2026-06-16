@@ -217,7 +217,7 @@ class Configuration:
 
     return creative_provider_types or [CreativeProviderType.GCS]
 
-  def set_videos(self, video_uris: list) -> None:
+  def set_videos(self, video_uris: list | str | None) -> None:
     """Set the videos that will be processed.
 
     Having a separate method for this allows multiple runs.
@@ -226,12 +226,23 @@ class Configuration:
     Args:
       video_uris: a list of Google Cloud Storage URIs for videos or paths.
     """
-    if isinstance(video_uris, str):
-      self.video_uris = [v.strip() for v in video_uris.split(",")]
+    if video_uris is None:
+      self.video_uris = []
+    elif isinstance(video_uris, str):
+      self.video_uris = [
+          video_uri.strip()
+          for video_uri in video_uris.split(",")
+          if video_uri and video_uri.strip()
+      ]
     elif isinstance(video_uris, (list, tuple)):
-      self.video_uris = video_uris
+      self.video_uris = [
+          str(video_uri).strip()
+          for video_uri in video_uris
+          if video_uri and str(video_uri).strip()
+      ]
     else:
-      self.video_uris = [video_uris]
+      video_uri = str(video_uris).strip()
+      self.video_uris = [video_uri] if video_uri else []
 
   def set_brand_details(
       self,

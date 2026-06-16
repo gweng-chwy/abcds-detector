@@ -112,6 +112,7 @@ def parse_args(arg_list: list[str] | None = None) -> argparse.Namespace:
       "-bucket_name", "-bn", help="Google Cloud Project Bucket Name (not url)."
   )
   parser.add_argument(
+      "--video_uris",
       "-video_uris",
       "-vu",
       help="Comma delimited string of video or folder URIs.",
@@ -242,6 +243,7 @@ def parse_args(arg_list: list[str] | None = None) -> argparse.Namespace:
       default=None,
   )
   parser.add_argument(
+      "--creative_provider_type",
       "-creative_provider_type",
       "-crpt",
       help="Creative provider type where the creatives are coming from",
