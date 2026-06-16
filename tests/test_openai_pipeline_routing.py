@@ -76,7 +76,9 @@ def test_openai_video_evaluation_maps_detector_dicts(monkeypatch):
         }]
       return []
 
-  monkeypatch.setattr(openai_api_service, "OpenAIAPIService", lambda: object())
+  monkeypatch.setattr(
+      openai_api_service, "OpenAIAPIService", lambda **kwargs: object()
+  )
   monkeypatch.setattr(openai_detector, "OpenAIDetector", DetectorStub)
 
   preprocess_result = _preprocess_result()
@@ -99,6 +101,42 @@ def test_openai_video_evaluation_maps_detector_dicts(monkeypatch):
   )
   assert evaluations[0].feature.id == "a_supers"
   assert detector_instances[0].calls[0][1] is preprocess_result
+
+
+def test_openai_video_evaluation_uses_configured_frame_limit(monkeypatch):
+  """OpenAI evaluation service honors the CLI max_frames setting."""
+  from evaluation_services import video_evaluation_service
+  from llms_evaluation import openai_api_service
+  from llms_evaluation import openai_detector
+
+  service_kwargs = []
+
+  class DetectorStub:
+    def __init__(self, openai_service):
+      self.openai_service = openai_service
+
+    def evaluate_features(self, config, preprocess_result, feature_configs):
+      return []
+
+  def openai_service_factory(**kwargs):
+    service_kwargs.append(kwargs)
+    return object()
+
+  monkeypatch.setattr(
+      openai_api_service, "OpenAIAPIService", openai_service_factory
+  )
+  monkeypatch.setattr(openai_detector, "OpenAIDetector", DetectorStub)
+
+  config = _openai_config()
+  config.max_frames = 100
+  video_evaluation_service.VideoEvaluationService().evaluate_features(
+      config=config,
+      video_uri="sample_videos/ad.mp4",
+      features_category=models.VideoFeatureCategory.LONG_FORM_ABCD,
+      preprocess_result=_preprocess_result(),
+  )
+
+  assert service_kwargs == [{"max_frame_count": 100}]
 
 
 def test_openai_video_evaluation_requires_preprocess_result():
@@ -174,7 +212,14 @@ def test_execute_openai_assessment_returns_video_assessments(monkeypatch):
   )
 
   class PreprocessorStub:
-    def __init__(self, cache_dir, max_frames, frame_sample_rate, openai_service):
+    def __init__(
+        self,
+        cache_dir,
+        max_frames,
+        frame_sample_rate,
+        openai_service,
+        transcription_model,
+    ):
       self.calls = []
 
     def preprocess(self, received_source):
@@ -209,6 +254,63 @@ def test_execute_openai_assessment_returns_video_assessments(monkeypatch):
           config=assessments[0].config,
       )
   ]
+
+
+def test_execute_openai_assessment_routes_shorts_preprocess_result(monkeypatch):
+  """OpenAI Shorts execution uses the same preprocessed evidence."""
+  import main
+  from evaluation_services import video_evaluation_service
+  from llms_evaluation import openai_api_service
+  from llms_evaluation import openai_video_preprocessor
+
+  source = models.VideoSource(
+      original_uri="sample_videos/ad.mp4",
+      local_path="sample_videos/ad.mp4",
+      source_type=models.CreativeProviderType.LOCAL.value,
+  )
+  preprocess_result = _preprocess_result(source)
+  routed_categories = []
+
+  class PreprocessorStub:
+    def __init__(
+        self,
+        cache_dir,
+        max_frames,
+        frame_sample_rate,
+        openai_service,
+        transcription_model,
+    ):
+      pass
+
+    def preprocess(self, received_source):
+      assert received_source == source
+      return preprocess_result
+
+  def evaluate_features(config, video_uri, features_category, preprocess_result):
+    assert video_uri == source.original_uri
+    assert preprocess_result is not None
+    routed_categories.append(features_category)
+    return []
+
+  config = _openai_config()
+  config.run_long_form_abcd = False
+  config.run_shorts = True
+
+  monkeypatch.setattr(main, "get_video_sources", lambda config: [source])
+  monkeypatch.setattr(openai_api_service, "OpenAIAPIService", lambda: object())
+  monkeypatch.setattr(
+      openai_video_preprocessor, "VideoPreprocessor", PreprocessorStub
+  )
+  monkeypatch.setattr(
+      video_evaluation_service.video_evaluation_service,
+      "evaluate_features",
+      evaluate_features,
+  )
+
+  assessments = main.execute_abcd_assessment_for_videos(config)
+
+  assert routed_categories == [models.VideoFeatureCategory.SHORTS]
+  assert assessments[0].shorts_evaluated_features == []
 
 
 def test_main_help_avoids_google_client_initialization():

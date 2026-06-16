@@ -25,11 +25,13 @@ class VideoPreprocessor:
       max_frames: int,
       frame_sample_rate: float,
       openai_service: object,
+      transcription_model: str = "gpt-4o-transcribe",
   ):
     self.cache_dir = Path(cache_dir)
     self.max_frames = max_frames
     self.frame_sample_rate = frame_sample_rate
     self.openai_service = openai_service
+    self.transcription_model = transcription_model
 
   def preprocess(self, source: models.VideoSource) -> models.VideoPreprocessResult:
     """Preprocess a video source for OpenAI evaluation."""
@@ -73,7 +75,9 @@ class VideoPreprocessor:
     if audio_available:
       result_audio_path = str(audio_path)
       try:
-        transcript = self.openai_service.transcribe_audio(str(audio_path))
+        transcript = self.openai_service.transcribe_audio(
+            str(audio_path), model_name=self.transcription_model
+        )
         transcript_available = bool(transcript)
       except Exception:
         transcript = ""

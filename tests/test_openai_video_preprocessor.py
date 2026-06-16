@@ -56,10 +56,11 @@ def test_local_preprocessing_extracts_media_and_returns_transcript(
 
   class FakeOpenAIService:
 
-    def transcribe_audio(self, audio_path):
+    def transcribe_audio(self, audio_path, model_name="gpt-4o-transcribe"):
       assert audio_path == str(
           cache_dir / build_cache_key(str(video_path)) / "audio.mp3"
       )
+      assert model_name == "gpt-4o-transcribe"
       return "hello there"
 
   def fake_run(cmd, check, capture_output, text, timeout):
@@ -158,6 +159,57 @@ def test_local_preprocessing_extracts_media_and_returns_transcript(
   )
 
 
+def test_local_preprocessing_uses_configured_transcription_model(
+    tmp_path, monkeypatch
+):
+  """Transcription uses the model configured by the CLI path."""
+  video_path = tmp_path / "video.mp4"
+  video_path.write_bytes(b"video")
+  cache_dir = tmp_path / "cache"
+  source = models.VideoSource(
+      original_uri=str(video_path),
+      local_path=str(video_path),
+      source_type=models.CreativeProviderType.LOCAL.value,
+  )
+  transcription_calls = []
+
+  class FakeOpenAIService:
+
+    def transcribe_audio(self, audio_path, model_name):
+      transcription_calls.append((audio_path, model_name))
+      return "configured transcript"
+
+  def fake_run(cmd, check, capture_output, text, timeout):
+    assert check is True
+    assert capture_output is True
+    assert text is True
+    assert timeout == 300
+    if cmd[0] == "ffprobe":
+      return SimpleNamespace(stdout="12.5\n")
+    if cmd[0] == "ffmpeg" and cmd[-1].endswith(".jpg"):
+      output_pattern = Path(cmd[-1])
+      (output_pattern.parent / "frame_0001.jpg").write_bytes(b"frame")
+    if cmd[0] == "ffmpeg" and cmd[-1].endswith(".mp3"):
+      Path(cmd[-1]).write_bytes(b"audio")
+    return SimpleNamespace(stdout="")
+
+  monkeypatch.setattr(preprocessor_module.subprocess, "run", fake_run)
+
+  result = VideoPreprocessor(
+      cache_dir=str(cache_dir),
+      max_frames=4,
+      frame_sample_rate=0.5,
+      openai_service=FakeOpenAIService(),
+      transcription_model="gpt-custom-transcribe",
+  ).preprocess(source)
+
+  assert transcription_calls == [(
+      str(cache_dir / build_cache_key(str(video_path)) / "audio.mp3"),
+      "gpt-custom-transcribe",
+  )]
+  assert result.transcript == "configured transcript"
+
+
 def test_youtube_preprocessing_downloads_before_extracting(tmp_path, monkeypatch):
   """YouTube preprocessing downloads into cache and returns the cached source."""
   cache_dir = tmp_path / "cache"
@@ -171,7 +223,8 @@ def test_youtube_preprocessing_downloads_before_extracting(tmp_path, monkeypatch
 
   class FakeOpenAIService:
 
-    def transcribe_audio(self, audio_path):
+    def transcribe_audio(self, audio_path, model_name="gpt-4o-transcribe"):
+      assert model_name == "gpt-4o-transcribe"
       return "downloaded transcript"
 
   def fake_run(cmd, check, capture_output, text, timeout):
@@ -242,7 +295,8 @@ def test_youtube_preprocessing_ignores_stale_hash_scoped_sources(
 
   class FakeOpenAIService:
 
-    def transcribe_audio(self, audio_path):
+    def transcribe_audio(self, audio_path, model_name="gpt-4o-transcribe"):
+      assert model_name == "gpt-4o-transcribe"
       return "fresh transcript"
 
   def fake_run(cmd, check, capture_output, text, timeout):
@@ -290,7 +344,7 @@ def test_transcription_failure_does_not_fail_preprocessing(tmp_path, monkeypatch
 
   class FailingOpenAIService:
 
-    def transcribe_audio(self, audio_path):
+    def transcribe_audio(self, audio_path, model_name="gpt-4o-transcribe"):
       raise RuntimeError("transcription failed")
 
   def fake_run(cmd, check, capture_output, text, timeout):
@@ -339,7 +393,7 @@ def test_audio_extraction_failure_does_not_fail_preprocessing(tmp_path, monkeypa
 
   class UnexpectedOpenAIService:
 
-    def transcribe_audio(self, audio_path):
+    def transcribe_audio(self, audio_path, model_name="gpt-4o-transcribe"):
       raise AssertionError("transcription should not run without audio")
 
   def fake_run(cmd, check, capture_output, text, timeout):

@@ -86,6 +86,7 @@ def _build_openai_preprocessor(config: Configuration):
       max_frames=config.max_frames,
       frame_sample_rate=config.frame_sample_rate,
       openai_service=openai_service,
+      transcription_model=config.openai_transcription_model,
   )
 
 

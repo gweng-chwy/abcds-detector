@@ -51,7 +51,7 @@ class VideoEvaluationService:
         features_category
     )
     detector = openai_detector.OpenAIDetector(
-        openai_api_service.OpenAIAPIService()
+        openai_api_service.OpenAIAPIService(max_frame_count=config.max_frames)
     )
     llm_evals = []
 
