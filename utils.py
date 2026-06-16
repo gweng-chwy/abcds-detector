@@ -22,6 +22,7 @@
 
 import argparse
 import textwrap
+import models
 from configuration import Configuration
 
 
@@ -48,9 +49,17 @@ def build_abcd_params_config(args: any) -> Configuration:
       use_llms=args.use_llms,
       run_long_form_abcd=args.run_long_form_abcd,
       run_shorts=args.run_shorts,
-      features_to_evaluate=args.features_to_evaluate.split(","),
+      features_to_evaluate=getattr(args, "features_to_evaluate", None),
       creative_provider_type=args.creative_provider_type,
       verbose=args.verbose,
+      llm_provider=getattr(args, "llm_provider", None),
+      openai_model=getattr(args, "openai_model", None),
+      openai_transcription_model=getattr(
+          args, "openai_transcription_model", None
+      ),
+      cache_dir=getattr(args, "cache_dir", None),
+      max_frames=getattr(args, "max_frames", None),
+      frame_sample_rate=getattr(args, "frame_sample_rate", None),
   )
   config.set_videos(args.video_uris)
   config.set_brand_details(
@@ -62,11 +71,11 @@ def build_abcd_params_config(args: any) -> Configuration:
   )
 
   config.set_llm_params(
-      llm_name=args.llm_name,
-      location=args.llm_location,
-      max_output_tokens=args.max_output_tokens,
-      temperature=args.temperature,
-      top_p=args.top_p,
+      llm_name=getattr(args, "llm_name", None),
+      location=getattr(args, "llm_location", None),
+      max_output_tokens=getattr(args, "max_output_tokens", None),
+      temperature=getattr(args, "temperature", None),
+      top_p=getattr(args, "top_p", None),
   )
 
   return config
@@ -81,7 +90,7 @@ def invalid_brand_metadata(config: Configuration):
   )
 
 
-def parse_args(arg_list: list[str] | None = None) -> None:
+def parse_args(arg_list: list[str] | None = None) -> argparse.Namespace:
   """Parses command line arguments"""
 
   parser = argparse.ArgumentParser(
@@ -103,6 +112,7 @@ def parse_args(arg_list: list[str] | None = None) -> None:
       "-bucket_name", "-bn", help="Google Cloud Project Bucket Name (not url)."
   )
   parser.add_argument(
+      "--video_uris",
       "-video_uris",
       "-vu",
       help="Comma delimited string of video or folder URIs.",
@@ -189,16 +199,56 @@ def parse_args(arg_list: list[str] | None = None) -> None:
       default=None,
   )
   parser.add_argument(
+      "--llm_provider",
+      "-llmp",
+      help="LLM provider",
+      default=models.LLMProviderType.GEMINI.value,
+  )
+  parser.add_argument(
+      "--openai_model",
+      "-oaim",
+      help="OpenAI model",
+      default="gpt-5.4-mini",
+  )
+  parser.add_argument(
+      "--openai_transcription_model",
+      "-oaitm",
+      help="OpenAI transcription model",
+      default="gpt-4o-transcribe",
+  )
+  parser.add_argument(
+      "--cache_dir",
+      "-cdir",
+      help="Directory for local cache output",
+      default=".cache/abcds-detector",
+  )
+  parser.add_argument(
+      "--max_frames",
+      "-mfr",
+      help="Maximum frames to sample for OpenAI video evaluation",
+      type=int,
+      default=24,
+  )
+  parser.add_argument(
+      "--frame_sample_rate",
+      "-fsr",
+      help="Frame sample rate for OpenAI video preprocessing",
+      type=float,
+      default=1.0,
+  )
+  parser.add_argument(
+      "--features_to_evaluate",
       "-features_to_evaluate",
       "-fteval",
       help="List of features to evaluate",
       default=None,
   )
   parser.add_argument(
+      "--creative_provider_type",
       "-creative_provider_type",
       "-crpt",
       help="Creative provider type where the creatives are coming from",
-      default=None,
+      default=models.CreativeProviderType.GCS.value,
   )
   parser.add_argument(
       "-extract_brand_metadata",

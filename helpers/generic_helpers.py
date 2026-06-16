@@ -20,17 +20,15 @@
 
 """Module to load generic helper functions"""
 
+import csv
 import json
 import os
 import urllib
 import datetime
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 import pandas
 import logging
-from google.cloud import bigquery
-from moviepy.editor import VideoFileClip
-from gcp_api_services import bigquery_api_service
-from gcp_api_services import gcs_api_service
 from configuration import FFMPEG_BUFFER, FFMPEG_BUFFER_REDUCED, Configuration
 import models
 
@@ -90,6 +88,9 @@ def trim_video(config: Configuration, video_uri: str):
       config: all the parameters
       video_uri: the video to trim the length for
   """
+  from moviepy.editor import VideoFileClip
+  from gcp_api_services import gcs_api_service
+
   reduced_uri = gcs_api_service.gcs_api_service.get_reduced_uri(
       config, video_uri
   )
@@ -243,6 +244,108 @@ def calculate_score(
   return score
 
 
+def feature_evaluation_to_dict(
+    eval_feature: models.FeatureEvaluation,
+) -> dict:
+  """Convert a FeatureEvaluation to JSON-safe dict."""
+  return {
+      "id": eval_feature.feature.id,
+      "name": eval_feature.feature.name,
+      "category": eval_feature.feature.category.value,
+      "sub_category": eval_feature.feature.sub_category.value,
+      "video_segment": eval_feature.feature.video_segment.value,
+      "evaluation_criteria": eval_feature.feature.evaluation_criteria,
+      "detected": eval_feature.detected,
+      "confidence_score": eval_feature.confidence_score,
+      "rationale": eval_feature.rationale,
+      "evidence": eval_feature.evidence,
+      "strengths": eval_feature.strengths,
+      "weaknesses": eval_feature.weaknesses,
+  }
+
+
+def video_assessment_to_dict(
+    video_assessment: models.VideoAssessment,
+) -> dict:
+  """Convert a VideoAssessment to JSON-safe dict."""
+  return {
+      "brand_name": video_assessment.brand_name,
+      "video_uri": video_assessment.video_uri,
+      "long_form_abcd_evaluated_features": [
+          feature_evaluation_to_dict(eval_feature)
+          for eval_feature in video_assessment.long_form_abcd_evaluated_features
+      ],
+      "shorts_evaluated_features": [
+          feature_evaluation_to_dict(eval_feature)
+          for eval_feature in video_assessment.shorts_evaluated_features
+      ],
+  }
+
+
+def write_assessments_json(
+    video_assessments: list[models.VideoAssessment],
+    assessment_file: str,
+) -> None:
+  """Write video assessments to a JSON file."""
+  output_path = Path(assessment_file)
+  output_path.parent.mkdir(parents=True, exist_ok=True)
+  payload = {
+      "assessments": [
+          video_assessment_to_dict(video_assessment)
+          for video_assessment in video_assessments
+      ]
+  }
+  output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def _evaluated_features(
+    video_assessment: models.VideoAssessment,
+) -> list[models.FeatureEvaluation]:
+  """Return all feature evaluations for a video assessment."""
+  return (
+      video_assessment.long_form_abcd_evaluated_features
+      + video_assessment.shorts_evaluated_features
+  )
+
+
+def _detected_csv_path(assessment_file: str) -> Path:
+  """Return the sibling detected-feature CSV path for a JSON output path."""
+  return Path(assessment_file).with_suffix(".csv")
+
+
+def write_assessments_detected_csv(
+    video_assessments: list[models.VideoAssessment],
+    assessment_file: str,
+) -> Path:
+  """Write detected booleans as one CSV row per assessed video."""
+  output_path = _detected_csv_path(assessment_file)
+  output_path.parent.mkdir(parents=True, exist_ok=True)
+
+  feature_ids = []
+  for video_assessment in video_assessments:
+    for eval_feature in _evaluated_features(video_assessment):
+      feature_id = eval_feature.feature.id
+      if feature_id not in feature_ids:
+        feature_ids.append(feature_id)
+
+  fieldnames = ["video_uri", "brand_name"] + feature_ids
+  with output_path.open("w", newline="", encoding="utf-8") as output_file:
+    writer = csv.DictWriter(output_file, fieldnames=fieldnames)
+    writer.writeheader()
+    for video_assessment in video_assessments:
+      row = {
+          "video_uri": video_assessment.video_uri,
+          "brand_name": video_assessment.brand_name,
+      }
+      for eval_feature in _evaluated_features(video_assessment):
+        row[eval_feature.feature.id] = (
+            "true" if eval_feature.detected else "false"
+        )
+      writer.writerow(row)
+
+  return output_path
+
+
 def get_feature_by_id(features: list[str], feature_id: str) -> list[str]:
   """Get feature configs by id"""
   features_found = [
@@ -257,6 +360,8 @@ def get_feature_by_id(features: list[str], feature_id: str) -> list[str]:
 
 def get_table_columns_schema() -> list[str]:
   """Gets the table columns schema for the assessments table in BQ."""
+  from google.cloud import bigquery
+
   return [
       {
           "column": "execution_timestamp",
@@ -315,8 +420,10 @@ def get_table_columns() -> list[str]:
   return columns
 
 
-def get_table_schema() -> list[bigquery.SchemaField]:
+def get_table_schema() -> list:
   """Gets the schema for the assessments table in BQ."""
+  from google.cloud import bigquery
+
   schema = []
   for column_schema in get_table_columns_schema():
     schema.append(
@@ -392,6 +499,7 @@ def store_in_bq(
     video_assessment: models.VideoAssessment,
 ):
   """Store ABCD assessment results in BQ"""
+  from gcp_api_services import bigquery_api_service
 
   print(
       f"Storing ABCD assessment for video {video_assessment.video_uri} in"
@@ -449,6 +557,8 @@ def build_features_for_bq(
   # Insert all feature configs first
   for eval_feature in evaluated_features:
     if config.creative_provider_type == models.CreativeProviderType:
+      from gcp_api_services import gcs_api_service
+
       video_name = gcs_api_service.gcs_api_service.get_video_name_from_uri(
           video_assessment.video_uri
       )

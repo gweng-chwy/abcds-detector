@@ -5,10 +5,6 @@ import functools
 import models
 import configuration
 from features_repository import feature_configs_handler
-from llms_evaluation import llms_detector
-from custom_evaluation import custom_detector
-from helpers import generic_helpers
-from gcp_api_services import gcs_api_service
 
 
 class VideoEvaluationService:
@@ -22,8 +18,90 @@ class VideoEvaluationService:
       config: configuration.Configuration,
       video_uri: str,
       features_category: models.VideoFeatureCategory,
+      preprocess_result: models.VideoPreprocessResult | None = None,
   ):
     """Run ABCD evaluation on videos for Full ABCD features or Shorts"""
+    if config.llm_provider_type == models.LLMProviderType.OPENAI:
+      return self._evaluate_features_with_openai(
+          config=config,
+          features_category=features_category,
+          preprocess_result=preprocess_result,
+      )
+
+    return self._evaluate_features_with_legacy(
+        config=config,
+        video_uri=video_uri,
+        features_category=features_category,
+    )
+
+  def _evaluate_features_with_openai(
+      self,
+      config: configuration.Configuration,
+      features_category: models.VideoFeatureCategory,
+      preprocess_result: models.VideoPreprocessResult | None,
+  ):
+    """Run OpenAI evaluation on preprocessed local video evidence."""
+    if preprocess_result is None:
+      raise ValueError("preprocess_result is required for OpenAI evaluation")
+
+    from llms_evaluation import openai_api_service
+    from llms_evaluation import openai_detector
+
+    feature_groups = feature_configs_handler.features_configs_handler.get_features_by_category_by_group_config(
+        features_category
+    )
+    detector = openai_detector.OpenAIDetector(
+        openai_api_service.OpenAIAPIService(max_frame_count=config.max_frames)
+    )
+    llm_evals = []
+
+    for feature_configs in feature_groups.values():
+      feature_configs = self._filter_feature_configs(config, feature_configs)
+      if not feature_configs:
+        continue
+
+      if config.use_llms and not config.use_annotations:
+        feature_configs_handler.features_configs_handler.change_evaluation_method_to_llms_only(
+            feature_configs
+        )
+
+      llm_evals.append(
+          detector.evaluate_features(
+              config=config,
+              preprocess_result=preprocess_result,
+              feature_configs=feature_configs,
+          )
+      )
+
+    return self._build_feature_evaluations(llm_evals, features_category)
+
+  def _filter_feature_configs(
+      self,
+      config: configuration.Configuration,
+      feature_configs: list[models.VideoFeature],
+  ) -> list[models.VideoFeature]:
+    """Return requested feature configs when feature filtering is configured."""
+    if not config.features_to_evaluate:
+      return feature_configs
+
+    requested_feature_ids = set(config.features_to_evaluate)
+    return [
+        feature_config
+        for feature_config in feature_configs
+        if feature_config.id in requested_feature_ids
+    ]
+
+  def _evaluate_features_with_legacy(
+      self,
+      config: configuration.Configuration,
+      video_uri: str,
+      features_category: models.VideoFeatureCategory,
+  ):
+    """Run legacy Gemini/GCS evaluation path."""
+    from llms_evaluation import llms_detector
+    from custom_evaluation import custom_detector
+    from helpers import generic_helpers
+    from gcp_api_services import gcs_api_service
 
     if config.extract_brand_metadata:
       metadata = llms_detector.llms_detector.get_video_metadata(
@@ -37,7 +115,6 @@ class VideoEvaluationService:
       )
       config.branded_call_to_actions = metadata.get("branded_call_to_actions")
 
-    feature_evaluations: list[models.FeatureEvaluation] = []
     tasks = []
     feature_groups = feature_configs_handler.features_configs_handler.get_features_by_category_by_group_config(
         features_category
@@ -46,6 +123,9 @@ class VideoEvaluationService:
 
     for group_key in feature_groups:
       feature_configs: list[models.VideoFeature] = feature_groups.get(group_key)
+      feature_configs = self._filter_feature_configs(config, feature_configs)
+      if not feature_configs:
+        continue
 
       # Use LLM evaluation method only
       if config.use_llms and not config.use_annotations:
@@ -127,7 +207,15 @@ class VideoEvaluationService:
     logging.info("Starting ABCD evaluation for features... \n")
 
     llm_evals = generic_helpers.execute_tasks_in_parallel(tasks)
+    return self._build_feature_evaluations(llm_evals, features_category)
 
+  def _build_feature_evaluations(
+      self,
+      llm_evals,
+      features_category: models.VideoFeatureCategory,
+  ):
+    """Convert raw detector dictionaries into FeatureEvaluation objects."""
+    feature_evaluations: list[models.FeatureEvaluation] = []
     # Process LLM results and create feature objs in the required format
     for evals in llm_evals:
       for evaluated_feature in evals:

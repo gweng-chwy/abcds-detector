@@ -21,7 +21,7 @@
 """Module that defines global parameters"""
 
 import os
-from models import CreativeProviderType, LLMParameters
+from models import CreativeProviderType, LLMParameters, LLMProviderType
 
 FFMPEG_BUFFER = "reduced/buffer.mp4"
 FFMPEG_BUFFER_REDUCED = "reduced/buffer_reduced.mp4"
@@ -55,8 +55,15 @@ class Configuration:
     self.use_llms = True
     self.run_long_form_abcd: bool = True
     self.run_shorts: bool = True
-    self.features_to_evaluate: list[str]  # list of feature ids to run
+    self.features_to_evaluate: list[str] = []  # list of feature ids to run
+    self.llm_provider_type = LLMProviderType.GEMINI
     self.creative_provider_type = CreativeProviderType.GCS  # GCS by default
+    self.creative_provider_types = [CreativeProviderType.GCS]
+    self.openai_model = "gpt-5.4-mini"
+    self.openai_transcription_model = "gpt-4o-transcribe"
+    self.cache_dir = ".cache/abcds-detector"
+    self.max_frames = 24
+    self.frame_sample_rate = 1.0
 
     # set videos
     self.video_uris: list[str] = []
@@ -93,9 +100,15 @@ class Configuration:
       extract_brand_metadata: bool,
       run_long_form_abcd: bool,
       run_shorts: bool,
-      features_to_evaluate: list[str],
-      creative_provider_type: CreativeProviderType,
+      features_to_evaluate: list[str] | str | None,
+      creative_provider_type: CreativeProviderType | str | None,
       verbose: bool,
+      llm_provider: LLMProviderType | str | None = None,
+      openai_model: str | None = None,
+      openai_transcription_model: str | None = None,
+      cache_dir: str | None = None,
+      max_frames: int | None = None,
+      frame_sample_rate: float | None = None,
   ) -> None:
     """Set the required parameters for ABCD to run.
 
@@ -116,7 +129,7 @@ class Configuration:
     self.project_id = project_id
     self.project_zone = project_zone or "us-central1"
     self.bucket_name = bucket_name
-    self.knowledge_graph_api_key = knowledge_graph_api_key.strip()
+    self.knowledge_graph_api_key = (knowledge_graph_api_key or "").strip()
     self.bq_dataset_name = bigquery_dataset
     self.bq_table_name = bigquery_table
     self.assessment_file = assessment_file
@@ -126,17 +139,85 @@ class Configuration:
     self.run_long_form_abcd = run_long_form_abcd
     self.run_shorts = run_shorts
     self.verbose = verbose
-    self.features_to_evaluate = features_to_evaluate
+    self.features_to_evaluate = self._parse_features_to_evaluate(
+        features_to_evaluate
+    )
+    self.llm_provider_type = self._parse_llm_provider_type(llm_provider)
+    self.openai_model = openai_model or self.openai_model
+    self.openai_transcription_model = (
+        openai_transcription_model or self.openai_transcription_model
+    )
+    self.cache_dir = cache_dir or self.cache_dir
+    self.max_frames = (
+        int(max_frames) if max_frames is not None else self.max_frames
+    )
+    self.frame_sample_rate = (
+        float(frame_sample_rate)
+        if frame_sample_rate is not None
+        else self.frame_sample_rate
+    )
 
-    if creative_provider_type == CreativeProviderType.GCS.value:
-      self.creative_provider_type = CreativeProviderType.GCS
-
-    if creative_provider_type == CreativeProviderType.YOUTUBE.value:
-      self.creative_provider_type = CreativeProviderType.YOUTUBE
+    self.creative_provider_types = self._parse_creative_provider_types(
+        creative_provider_type
+    )
+    self.creative_provider_type = self.creative_provider_types[0]
 
     self.annotation_path = f"gs://{bucket_name}/ABCD/"
 
-  def set_videos(self, video_uris: list) -> None:
+  @staticmethod
+  def _parse_features_to_evaluate(features_to_evaluate) -> list[str]:
+    """Parse feature IDs from a CLI string or pre-parsed list."""
+    if not features_to_evaluate:
+      return []
+
+    if isinstance(features_to_evaluate, str):
+      feature_values = features_to_evaluate.split(",")
+    else:
+      feature_values = features_to_evaluate
+
+    return [
+        feature.strip()
+        for feature in feature_values
+        if feature and feature.strip()
+    ]
+
+  @staticmethod
+  def _parse_llm_provider_type(llm_provider) -> LLMProviderType:
+    """Parse LLM provider values from CLI strings or enum values."""
+    if isinstance(llm_provider, LLMProviderType):
+      return llm_provider
+
+    provider_value = (llm_provider or LLMProviderType.GEMINI.value).strip()
+    return LLMProviderType(provider_value.upper())
+
+  @staticmethod
+  def _parse_creative_provider_types(
+      creative_provider_type,
+  ) -> list[CreativeProviderType]:
+    """Parse comma-delimited creative provider values."""
+    if creative_provider_type is None:
+      provider_values = [CreativeProviderType.GCS.value]
+    elif isinstance(creative_provider_type, CreativeProviderType):
+      provider_values = [creative_provider_type.value]
+    elif isinstance(creative_provider_type, (list, tuple)):
+      provider_values = [
+          provider.value
+          if isinstance(provider, CreativeProviderType)
+          else str(provider)
+          for provider in creative_provider_type
+      ]
+    else:
+      provider_values = str(creative_provider_type).split(",")
+
+    creative_provider_types = []
+    for provider in provider_values:
+      provider_value = provider.strip().upper()
+      if provider_value:
+        creative_provider_types.append(CreativeProviderType(provider_value))
+
+    return creative_provider_types or [CreativeProviderType.GCS]
+
+  def set_videos(self, video_uris: list | str | None) -> None:
     """Set the videos that will be processed.
 
     Having a separate method for this allows multiple runs.
@@ -145,12 +226,23 @@ class Configuration:
     Args:
       video_uris: a list of Google Cloud Storage URIs for videos or paths.
     """
-    if isinstance(video_uris, str):
-      self.video_uris = [v.strip() for v in video_uris.split(",")]
+    if video_uris is None:
+      self.video_uris = []
+    elif isinstance(video_uris, str):
+      self.video_uris = [
+          video_uri.strip()
+          for video_uri in video_uris.split(",")
+          if video_uri and video_uri.strip()
+      ]
     elif isinstance(video_uris, (list, tuple)):
-      self.video_uris = video_uris
+      self.video_uris = [
+          str(video_uri).strip()
+          for video_uri in video_uris
+          if video_uri and str(video_uri).strip()
+      ]
     else:
-      self.video_uris = [video_uris]
+      video_uri = str(video_uris).strip()
+      self.video_uris = [video_uri] if video_uri else []
 
   def set_brand_details(
       self,
@@ -232,11 +324,17 @@ class Configuration:
       temperature: how creative the model gets
       top_p: how varied the model gets
     """
-    self.llm_params.model_name = llm_name
-    self.llm_params.location = location
-    self.llm_params.generation_config = {
-        "max_output_tokens": int(max_output_tokens),
-        "temperature": float(temperature),
-        "top_p": float(top_p),
-        "response_schema": {"type": "string"},
-    }
+    if llm_name is not None:
+      self.llm_params.model_name = llm_name
+    if location is not None:
+      self.llm_params.location = location
+
+    generation_config = dict(self.llm_params.generation_config)
+    if max_output_tokens is not None:
+      generation_config["max_output_tokens"] = int(max_output_tokens)
+    if temperature is not None:
+      generation_config["temperature"] = float(temperature)
+    if top_p is not None:
+      generation_config["top_p"] = float(top_p)
+
+    self.llm_params.generation_config = generation_config

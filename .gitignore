@@ -5,6 +5,9 @@ venv
 **/__pycache__/
 reduced/
 ffmpeg
+sample_videos
+.cache/
+outputs/
 annotations_evaluation/_pycache_
 feature_configs/_pycache_
 helpers/_pycache_
