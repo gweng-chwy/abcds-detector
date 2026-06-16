@@ -42,7 +42,37 @@ class CreativeProviderType(Enum):
   """Enum that represents evaluation methods"""
 
   GCS = "GCS"
+  LOCAL = "LOCAL"
   YOUTUBE = "YOUTUBE"
+
+
+class LLMProviderType(Enum):
+  """Enum that represents supported LLM providers"""
+
+  GEMINI = "GEMINI"
+  OPENAI = "OPENAI"
+
+
+@dataclass
+class VideoSource:
+  """Class that represents a resolved video source"""
+
+  original_uri: str
+  local_path: str
+  source_type: str
+
+
+@dataclass
+class VideoPreprocessResult:
+  """Class that represents video preprocessing outputs"""
+
+  source: VideoSource
+  duration_seconds: float
+  full_video_frames: list[str]
+  first_5_seconds_frames: list[str]
+  audio_path: str | None
+  transcript: str
+  transcript_available: bool
 
 
 @dataclass
@@ -184,6 +214,16 @@ VIDEO_RESPONSE_SCHEMA = {
             "weaknesses",
         ],
     },
+}
+
+
+OPENAI_VIDEO_RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "features": VIDEO_RESPONSE_SCHEMA,
+    },
+    "required": ["features"],
+    "additionalProperties": False,
 }
 
 

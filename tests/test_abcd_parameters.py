@@ -22,6 +22,7 @@
 
 from utils import build_abcd_params_config
 from dataclasses import dataclass
+import models
 
 
 @dataclass
@@ -35,8 +36,11 @@ class ArgsMock:
   bigquery_dataset: str
   bigquery_table: str
   assessment_file: str
+  extract_brand_metadata: bool
   use_annotations: str
   use_llms: bool
+  run_long_form_abcd: bool
+  run_shorts: bool
   verbose: bool
   annotation_path: str
   # set videos
@@ -54,13 +58,20 @@ class ArgsMock:
   logo_size_threshold: float
   avg_shot_duration_seconds: float
   dynamic_cutoff_ms: float
+  features_to_evaluate: str
+  creative_provider_type: str
+  llm_provider: str
+  openai_model: str
+  openai_transcription_model: str
+  cache_dir: str
+  max_frames: int
+  frame_sample_rate: float
   # set model
   llm_name: str
-  video_size_limit_mb: int
+  llm_location: str
   max_output_tokens: int
   temperature: float
   top_p: float
-  top_k: float
 
 
 def test_not_empty_abcd_params():
@@ -74,8 +85,11 @@ def test_not_empty_abcd_params():
       bigquery_dataset="abcd_detector_ds",
       bigquery_table="my_table",
       assessment_file="",
+      extract_brand_metadata=True,
       use_annotations=True,
       use_llms=True,
+      run_long_form_abcd=True,
+      run_shorts=True,
       verbose=True,
       annotation_path="",
       video_uris="gs://abcd-detector-input/Google/videos/",
@@ -90,12 +104,19 @@ def test_not_empty_abcd_params():
       logo_size_threshold=0.5,
       avg_shot_duration_seconds=3,
       dynamic_cutoff_ms=3000,
+      features_to_evaluate="feature_1,feature_2",
+      creative_provider_type="GCS",
+      llm_provider="GEMINI",
+      openai_model="gpt-5.4-mini",
+      openai_transcription_model="gpt-4o-transcribe",
+      cache_dir=".cache/abcds-detector",
+      max_frames=24,
+      frame_sample_rate=1.0,
       llm_name="gemini-1.5-pro-002",
+      llm_location="us-central1",
       top_p=0.1,
-      video_size_limit_mb=50,
       max_output_tokens=8000,
       temperature=1,
-      top_k=0.1,
   )
 
   config = build_abcd_params_config(args)
@@ -141,9 +162,17 @@ def test_not_empty_abcd_params():
   assert config.dynamic_cutoff_ms is not None
 
   # set model
-  assert config.llm_name is not None
-  assert config.video_size_limit_mb is not None
-  assert config.max_output_tokens is not None
-  assert config.temperature is not None
-  assert config.top_p is not None
-  assert config.top_k is not None
+  assert config.llm_provider_type == models.LLMProviderType.GEMINI
+  assert config.creative_provider_type == models.CreativeProviderType.GCS
+  assert config.creative_provider_types == [models.CreativeProviderType.GCS]
+  assert config.openai_model == "gpt-5.4-mini"
+  assert config.openai_transcription_model == "gpt-4o-transcribe"
+  assert config.cache_dir == ".cache/abcds-detector"
+  assert config.max_frames == 24
+  assert config.frame_sample_rate == 1.0
+  assert config.features_to_evaluate == ["feature_1", "feature_2"]
+  assert config.llm_params.model_name == "gemini-1.5-pro-002"
+  assert config.llm_params.location == "us-central1"
+  assert config.llm_params.generation_config["max_output_tokens"] == 8000
+  assert config.llm_params.generation_config["temperature"] == 1
+  assert config.llm_params.generation_config["top_p"] == 0.1
