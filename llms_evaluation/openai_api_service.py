@@ -182,13 +182,14 @@ class OpenAIAPIService:
             f"{frame_path}"
         )
 
-      image_bytes = path.read_bytes()
-      total_image_bytes += len(image_bytes)
+      image_size = path.stat().st_size
+      total_image_bytes += image_size
       if total_image_bytes > self.max_total_image_bytes:
         raise ValueError(
             f"Total image bytes {total_image_bytes} exceeds maximum "
             f"{self.max_total_image_bytes}"
         )
+      image_bytes = path.read_bytes()
       image_inputs.append(self._image_data_url(mime_type, image_bytes))
 
     return image_inputs

@@ -2,6 +2,7 @@
 
 import base64
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
@@ -260,11 +261,16 @@ def test_build_input_rejects_too_many_frames(tmp_path):
     )
 
 
-def test_build_input_rejects_total_image_bytes_over_cap(tmp_path):
+def test_build_input_rejects_total_image_bytes_over_cap(tmp_path, monkeypatch):
   """Total image evidence size is capped before request construction."""
   frame_path = tmp_path / "frame.jpg"
   frame_path.write_bytes(b"image")
   service = OpenAIAPIService(client=mock.Mock(), max_total_image_bytes=4)
+
+  def fail_read_bytes(self):
+    raise AssertionError("oversized image should not be read")
+
+  monkeypatch.setattr(Path, "read_bytes", fail_read_bytes)
 
   with pytest.raises(ValueError, match="Total image bytes .* exceeds maximum 4"):
     service.build_input(
