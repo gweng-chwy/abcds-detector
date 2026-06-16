@@ -79,7 +79,8 @@ OPENAI_API_KEY="..." python main.py \
 
 ## Outputs
 
-The MVP writes JSON only. The output contains one assessment per video.
+The MVP writes the existing JSON assessment output and a sibling CSV summary.
+The JSON output contains one assessment per video and keeps the existing shape.
 
 Top-level shape:
 
@@ -121,6 +122,19 @@ Each feature result keeps the existing project shape:
 ```
 
 The example above is shape-only. Full output includes all enabled features.
+
+When `--assessment_file outputs/abcd_results.json` is set, the CLI also writes
+`outputs/abcd_results.csv`. The CSV contains one row per video and one column
+per evaluated feature ID:
+
+```csv
+video_uri,brand_name,a_dynamic_start,a_quick_pacing,shorts_human_voice
+sample_videos/google/videos/example.mp4,Chewy,true,false,true
+```
+
+If a feature was not evaluated for a video, its cell is blank. The CSV is a
+detected-summary sidecar only; JSON remains the source of full rationale,
+evidence, confidence, strengths, and weaknesses.
 
 ## Supported Features
 

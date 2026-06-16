@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="758" viewBox="0 0 760 758">
+<rect width="100%" height="100%" fill="#ffffff"/>
+<text x="24" y="34" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#1a202c">Long-form ABCD Detected Matrix</text>
+<text x="24" y="56" font-family="Arial, sans-serif" font-size="13" fill="#4a5568">Green=true, red=false, gray=not evaluated</text>
+<text x="330" y="72" font-family="Arial, sans-serif" font-size="11" fill="#2d3748" transform="rotate(-35 330 72)">video 1</text>
+<rect x="0" y="60" width="760" height="28" fill="#f7fafc"/>
+<text x="24" y="78" font-family="Arial, sans-serif" font-size="12" fill="#2d3748">a_dynamic_start</text>
+<rect x="330" y="64" width="14" height="14" rx="2" fill="#2f855a"/>
+<rect x="0" y="88" width="760" height="28" fill="#ffffff"/>
+<text x="24" y="106" font-family="Arial, sans-serif" font-size="12" fill="#2d3748">a_quick_pacing</text>
+<rect x="330" y="92" width="14" height="14" rx="2" fill="#c53030"/>
+<rect x="0" y="116" width="760" height="28" fill="#f7fafc"/>
+<text x="24" y="134" font-family="Arial, sans-serif" font-size="12" fill="#2d3748">a_quick_pacing_1st_5_secs</text>
+<rect x="330" y="120" width="14" height="14" rx="2" fill="#c53030"/>
+<rect x="0" y="144" width="760" height="28" fill="#ffffff"/>
+<text x="24" y="162" font-family="Arial, sans-serif" font-size="12" fill="#2d3748">a_supers</text>
+<rect x="330" y="148" width="14" height="14" rx="2" fill="#2f855a"/>
+<rect x="0" y="172" width="760" height="28" fill="#f7fafc"/>
+<text x="24" y="190" font-family="Arial, sans-serif" font-size="12" fill="#2d3748">a_supers_with_audio</text>
+<rect x="330" y="176" width="14" height="14" rx="2" fill="#2f855a"/>
+<rect x="0" y="200" width="760" height="28" fill="#ffffff"/>
+<text x="24" y="218" font-family="Arial, sans-serif" font-size="12" fill="#2d3748">b_brand_mention_speech</text>
+<rect x="330" y="204" width="14" height="14" rx="2" fill="#2f855a"/>
+<rect x="0" y="228" width="760" height="28" fill="#f7fafc"/>
+<text x="24" y="246" font-family="Arial, sans-serif" font-size="12" fill="#2d3748">b_brand_mention_speech_1st_5_secs</text>
+<rect x="330" y="232" width="14" height="14" rx="2" fill="#c53030"/>
+<rect x="0" y="256" width="760" height="28" fill="#ffffff"/>
+<text x="24" y="274" font-family="Arial, sans-serif" font-size="12" fill="#2d3748">b_brand_visuals</text>
+<rect x="330" y="260" width="14" height="14" rx="2" fill="#c53030"/>
+<rect x="0" y="284" width="760" height="28" fill="#f7fafc"/>
+<text x="24" y="302" font-family="Arial, sans-serif" font-size="12" fill="#2d3748">b_brand_visuals_1st_5_secs</text>
+<rect x="330" y="288" width="14" height="14" rx="2" fill="#c53030"/>
+<rect x="0" y="312" width="760" height="28" fill="#ffffff"/>
+<text x="24" y="330" font-family="Arial, sans-serif" font-size="12" fill="#2d3748">b_product_mention_speech</text>
+<rect x="330" y="316" width="14" height="14" rx="2" fill="#2f855a"/>
+<rect x="0" y="340" width="760" height="28" fill="#f7fafc"/>
+<text x="24" y="358" font-family="Arial, sans-serif" font-size="12" fill="#2d3748">b_product_mention_speech_1st_5_secs</text>
+<rect x="330" y="344" width="14" height="14" rx="2" fill="#c53030"/>
+<rect x="0" y="368" width="760" height="28" fill="#ffffff"/>
+<text x="24" y="386" font-family="Arial, sans-serif" font-size="12" fill="#2d3748">b_product_mention_text</text>
+<rect x="330" y="372" width="14" height="14" rx="2" fill="#2f855a"/>
+<rect x="0" y="396" width="760" height="28" fill="#f7fafc"/>
+<text x="24" y="414" font-family="Arial, sans-serif" font-size="12" fill="#2d3748">b_product_mention_text_1st_5_secs</text>
+<rect x="330" y="400" width="14" height="14" rx="2" fill="#c53030"/>
+<rect x="0" y="424" width="760" height="28" fill="#ffffff"/>
+<text x="24" y="442" font-family="Arial, sans-serif" font-size="12" fill="#2d3748">b_product_visuals</text>
+<rect x="330" y="428" width="14" height="14" rx="2" fill="#c53030"/>
+<rect x="0" y="452" width="760" height="28" fill="#f7fafc"/>
+<text x="24" y="470" font-family="Arial, sans-serif" font-size="12" fill="#2d3748">b_product_visuals_1st_5_secs</text>
+<rect x="330" y="456" width="14" height="14" rx="2" fill="#c53030"/>
+<rect x="0" y="480" width="760" height="28" fill="#ffffff"/>
+<text x="24" y="498" font-family="Arial, sans-serif" font-size="12" fill="#2d3748">c_overall_pacing</text>
+<rect x="330" y="484" width="14" height="14" rx="2" fill="#c53030"/>
+<rect x="0" y="508" width="760" height="28" fill="#f7fafc"/>
+<text x="24" y="526" font-family="Arial, sans-serif" font-size="12" fill="#2d3748">c_presence_of_people</text>
+<rect x="330" y="512" width="14" height="14" rx="2" fill="#2f855a"/>
+<rect x="0" y="536" width="760" height="28" fill="#ffffff"/>
+<text x="24" y="554" font-family="Arial, sans-serif" font-size="12" fill="#2d3748">c_presence_of_people_1st_5_secs</text>
+<rect x="330" y="540" width="14" height="14" rx="2" fill="#c53030"/>
+<rect x="0" y="564" width="760" height="28" fill="#f7fafc"/>
+<text x="24" y="582" font-family="Arial, sans-serif" font-size="12" fill="#2d3748">c_visible_face</text>
+<rect x="330" y="568" width="14" height="14" rx="2" fill="#c53030"/>
+<rect x="0" y="592" width="760" height="28" fill="#ffffff"/>
+<text x="24" y="610" font-family="Arial, sans-serif" font-size="12" fill="#2d3748">c_visible_face_close_up</text>
+<rect x="330" y="596" width="14" height="14" rx="2" fill="#c53030"/>
+<rect x="0" y="620" width="760" height="28" fill="#f7fafc"/>
+<text x="24" y="638" font-family="Arial, sans-serif" font-size="12" fill="#2d3748">d_audio_speech_early_1st_5_secs</text>
+<rect x="330" y="624" width="14" height="14" rx="2" fill="#2f855a"/>
+<rect x="0" y="648" width="760" height="28" fill="#ffffff"/>
+<text x="24" y="666" font-family="Arial, sans-serif" font-size="12" fill="#2d3748">d_call_to_action_speech</text>
+<rect x="330" y="652" width="14" height="14" rx="2" fill="#c53030"/>
+<rect x="0" y="676" width="760" height="28" fill="#f7fafc"/>
+<text x="24" y="694" font-family="Arial, sans-serif" font-size="12" fill="#2d3748">d_call_to_action_text</text>
+<rect x="330" y="680" width="14" height="14" rx="2" fill="#c53030"/>
+</svg>

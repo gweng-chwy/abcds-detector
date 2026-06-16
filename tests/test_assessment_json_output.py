@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 
-"""Tests for JSON assessment output."""
+"""Tests for assessment file output."""
 
+import csv
 import importlib
 import json
 import sys
@@ -56,10 +57,10 @@ def _feature(feature_id="a_supers"):
   )
 
 
-def _feature_eval(feature_id="a_supers"):
+def _feature_eval(feature_id="a_supers", detected=True):
   return models.FeatureEvaluation(
       feature=_feature(feature_id),
-      detected=True,
+      detected=detected,
       confidence_score=0.9,
       rationale="Text visible.",
       evidence="Frame 1.",
@@ -106,10 +107,62 @@ def test_write_assessments_json(tmp_path, monkeypatch):
   }
 
 
+def test_write_assessments_detected_csv(tmp_path, monkeypatch):
+  """CSV writer creates one detected-feature row per video."""
+  generic_helpers = _import_generic_helpers_with_google_import_guard(monkeypatch)
+  assessments = [
+      models.VideoAssessment(
+          brand_name="Chewy",
+          video_uri="sample_videos/ad-1.mp4",
+          long_form_abcd_evaluated_features=[
+              _feature_eval("a_supers", detected=True),
+              _feature_eval("b_product", detected=False),
+          ],
+          shorts_evaluated_features=[],
+          config=object(),
+      ),
+      models.VideoAssessment(
+          brand_name="Chewy",
+          video_uri="sample_videos/ad-2.mp4",
+          long_form_abcd_evaluated_features=[],
+          shorts_evaluated_features=[
+              _feature_eval("shorts_human_voice", detected=True),
+          ],
+          config=object(),
+      ),
+  ]
+  json_output = tmp_path / "nested" / "results.json"
+
+  csv_output = generic_helpers.write_assessments_detected_csv(
+      assessments,
+      str(json_output),
+  )
+
+  assert csv_output == tmp_path / "nested" / "results.csv"
+  with csv_output.open(newline="", encoding="utf-8") as output_file:
+    rows = list(csv.DictReader(output_file))
+  assert rows == [
+      {
+          "video_uri": "sample_videos/ad-1.mp4",
+          "brand_name": "Chewy",
+          "a_supers": "true",
+          "b_product": "false",
+          "shorts_human_voice": "",
+      },
+      {
+          "video_uri": "sample_videos/ad-2.mp4",
+          "brand_name": "Chewy",
+          "a_supers": "",
+          "b_product": "",
+          "shorts_human_voice": "true",
+      },
+  ]
+
+
 def test_main_writes_assessment_json_when_assessment_file_set(
     tmp_path, monkeypatch
 ):
-  """main writes returned assessments to the configured JSON path."""
+  """main writes returned assessments to JSON and detected CSV paths."""
   import main
 
   assessment = models.VideoAssessment(
@@ -120,7 +173,8 @@ def test_main_writes_assessment_json_when_assessment_file_set(
       config=object(),
   )
   output = tmp_path / "results.json"
-  write_calls = []
+  json_write_calls = []
+  csv_write_calls = []
 
   monkeypatch.setattr(
       main,
@@ -133,7 +187,14 @@ def test_main_writes_assessment_json_when_assessment_file_set(
   monkeypatch.setattr(
       generic_helpers,
       "write_assessments_json",
-      lambda video_assessments, assessment_file: write_calls.append(
+      lambda video_assessments, assessment_file: json_write_calls.append(
+          (video_assessments, assessment_file)
+      ),
+  )
+  monkeypatch.setattr(
+      generic_helpers,
+      "write_assessments_detected_csv",
+      lambda video_assessments, assessment_file: csv_write_calls.append(
           (video_assessments, assessment_file)
       ),
   )
@@ -155,4 +216,5 @@ def test_main_writes_assessment_json_when_assessment_file_set(
       str(output),
   ])
 
-  assert write_calls == [([assessment], str(output))]
+  assert json_write_calls == [([assessment], str(output))]
+  assert csv_write_calls == [([assessment], str(output))]

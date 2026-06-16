@@ -287,6 +287,10 @@ def main(arg_list: list[str] | None = None, raise_on_error: bool = False) -> Non
             video_assessments,
             config.assessment_file,
         )
+        generic_helpers.write_assessments_detected_csv(
+            video_assessments,
+            config.assessment_file,
+        )
       logging.info("Finished ABCD assessment. \n")
     else:
       logging.info("There are no videos to process. \n")

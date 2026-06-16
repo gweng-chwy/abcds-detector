@@ -201,6 +201,17 @@ python main.py \
 
 YouTube URLs can also be included in `--video_uris`.
 
+When `-assessment_file outputs/abcd_results.json` is set, the CLI writes:
+
+```text
+outputs/abcd_results.json
+outputs/abcd_results.csv
+```
+
+The JSON file keeps the full assessment shape. The CSV file contains one row per
+video and one column per evaluated feature ID, with `true` or `false` values for
+`detected`.
+
 Private sample videos should live outside git. This repository uses a local
 `sample_videos` symlink for manual testing.
 

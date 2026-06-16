@@ -20,6 +20,7 @@
 
 """Module to load generic helper functions"""
 
+import csv
 import json
 import os
 import urllib
@@ -295,6 +296,54 @@ def write_assessments_json(
       ]
   }
   output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def _evaluated_features(
+    video_assessment: models.VideoAssessment,
+) -> list[models.FeatureEvaluation]:
+  """Return all feature evaluations for a video assessment."""
+  return (
+      video_assessment.long_form_abcd_evaluated_features
+      + video_assessment.shorts_evaluated_features
+  )
+
+
+def _detected_csv_path(assessment_file: str) -> Path:
+  """Return the sibling detected-feature CSV path for a JSON output path."""
+  return Path(assessment_file).with_suffix(".csv")
+
+
+def write_assessments_detected_csv(
+    video_assessments: list[models.VideoAssessment],
+    assessment_file: str,
+) -> Path:
+  """Write detected booleans as one CSV row per assessed video."""
+  output_path = _detected_csv_path(assessment_file)
+  output_path.parent.mkdir(parents=True, exist_ok=True)
+
+  feature_ids = []
+  for video_assessment in video_assessments:
+    for eval_feature in _evaluated_features(video_assessment):
+      feature_id = eval_feature.feature.id
+      if feature_id not in feature_ids:
+        feature_ids.append(feature_id)
+
+  fieldnames = ["video_uri", "brand_name"] + feature_ids
+  with output_path.open("w", newline="", encoding="utf-8") as output_file:
+    writer = csv.DictWriter(output_file, fieldnames=fieldnames)
+    writer.writeheader()
+    for video_assessment in video_assessments:
+      row = {
+          "video_uri": video_assessment.video_uri,
+          "brand_name": video_assessment.brand_name,
+      }
+      for eval_feature in _evaluated_features(video_assessment):
+        row[eval_feature.feature.id] = (
+            "true" if eval_feature.detected else "false"
+        )
+      writer.writerow(row)
+
+  return output_path
 
 
 def get_feature_by_id(features: list[str], feature_id: str) -> list[str]:
