@@ -29,6 +29,7 @@ For example:
 import models
 from creative_providers import creative_provider_factory
 from creative_providers import gcs_creative_provider
+from creative_providers import local_creative_provider
 from creative_providers import youtube_creative_provider
 
 # Content Generation Service Factory
@@ -44,6 +45,10 @@ def register_content_generation_services():
   provider_factory.register_provider(
       models.CreativeProviderType.YOUTUBE.value,
       youtube_creative_provider.YoutubeCreativeProvider,
+  )
+  provider_factory.register_provider(
+      models.CreativeProviderType.LOCAL.value,
+      local_creative_provider.LocalCreativeProvider,
   )
 
 
