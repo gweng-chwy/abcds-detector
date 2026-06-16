@@ -107,6 +107,27 @@ def test_detector_returns_empty_list_when_response_has_no_features():
   assert result == []
 
 
+def test_detector_prompt_preserves_legacy_evaluation_directives():
+  """OpenAI prompt keeps the core legacy ABCD evaluation instructions."""
+  service = OpenAIServiceStub({"features": []})
+
+  OpenAIDetector(service).evaluate_features(
+      config=ConfigStub(),
+      preprocess_result=_preprocess_result(),
+      feature_configs=[_feature("a_supers", models.VideoSegment.FULL_VIDEO)],
+  )
+
+  system_instructions = service.calls[0]["prompt_config"].system_instructions
+  assert "No Hallucination" in system_instructions
+  assert "ambiguous or unverifiable" in system_instructions
+  assert "must answer false" in system_instructions
+  assert "confidence score from 0.0" in system_instructions
+  assert "Use timestamps" in system_instructions
+  assert "Strict Adherence to Format" in system_instructions
+  assert "Feature ID Handling" in system_instructions
+  assert "exact, case-sensitive copy" in system_instructions
+
+
 def test_detector_selects_first_5s_frames_when_all_features_are_first_5s():
   """First-five-second feature groups evaluate only first-five-second frames."""
   service = OpenAIServiceStub({"features": []})

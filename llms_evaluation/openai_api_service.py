@@ -1,6 +1,7 @@
 """OpenAI API service for video creative evaluation."""
 
 import base64
+import copy
 import json
 import mimetypes
 import os
@@ -12,14 +13,66 @@ from openai import OpenAI
 import models
 
 
+DEFAULT_MAX_FRAME_COUNT = 24
+DEFAULT_MAX_TOTAL_IMAGE_BYTES = 20 * 1024 * 1024
+ALLOWED_IMAGE_MIME_TYPES = frozenset({
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+})
+
+
+def to_openai_strict_schema(schema: dict) -> dict:
+  """Return an OpenAI strict-structured-output compatible schema copy."""
+  strict_schema = copy.deepcopy(schema)
+  _make_schema_objects_strict(strict_schema)
+  return strict_schema
+
+
+def _make_schema_objects_strict(schema_fragment) -> None:
+  if isinstance(schema_fragment, dict):
+    properties = schema_fragment.get("properties")
+    if isinstance(properties, dict):
+      schema_fragment["additionalProperties"] = False
+      schema_fragment["required"] = list(properties.keys())
+      for property_schema in properties.values():
+        _make_schema_objects_strict(property_schema)
+    elif schema_fragment.get("type") == "object":
+      schema_fragment["additionalProperties"] = False
+      schema_fragment.setdefault("required", [])
+
+    if "items" in schema_fragment:
+      _make_schema_objects_strict(schema_fragment["items"])
+
+    for key in ("anyOf", "allOf", "oneOf"):
+      if key in schema_fragment:
+        _make_schema_objects_strict(schema_fragment[key])
+    if "not" in schema_fragment:
+      _make_schema_objects_strict(schema_fragment["not"])
+    return
+
+  if isinstance(schema_fragment, (list, tuple)):
+    for item in schema_fragment:
+      _make_schema_objects_strict(item)
+
+
 class OpenAIAPIService:
   """Wrapper around OpenAI APIs used by the OpenAI evaluation path."""
 
-  def __init__(self, client=None):
+  def __init__(
+      self,
+      client=None,
+      max_frame_count: int = DEFAULT_MAX_FRAME_COUNT,
+      max_total_image_bytes: int = DEFAULT_MAX_TOTAL_IMAGE_BYTES,
+      allowed_image_mime_types: frozenset[str] = ALLOWED_IMAGE_MIME_TYPES,
+  ):
     """Initialize the service with an injected or real OpenAI client."""
     if client is None and not os.environ.get("OPENAI_API_KEY"):
       raise ValueError("OPENAI_API_KEY is required for llm_provider=OPENAI")
     self.client = client or OpenAI()
+    self.max_frame_count = max_frame_count
+    self.max_total_image_bytes = max_total_image_bytes
+    self.allowed_image_mime_types = allowed_image_mime_types
 
   def transcribe_audio(
       self,
@@ -42,6 +95,7 @@ class OpenAIAPIService:
       duration_seconds: float,
   ) -> list[dict]:
     """Build Responses API input from prompt, transcript, and images."""
+    image_inputs = self._build_image_inputs(frame_paths)
     user_content = [{
         "type": "input_text",
         "text": (
@@ -50,10 +104,10 @@ class OpenAIAPIService:
             f"{prompt_config.prompt}"
         ),
     }]
-    for frame_path in frame_paths:
+    for image_input in image_inputs:
       user_content.append({
           "type": "input_image",
-          "image_url": self._image_data_url(frame_path),
+          "image_url": image_input,
       })
 
     return [
@@ -92,7 +146,7 @@ class OpenAIAPIService:
                 "type": "json_schema",
                 "name": "abcd_feature_evaluation",
                 "strict": True,
-                "schema": schema,
+                "schema": to_openai_strict_schema(schema),
             }
         },
     )
@@ -110,9 +164,37 @@ class OpenAIAPIService:
 
     raise ValueError("No JSON text found in OpenAI response")
 
-  def _image_data_url(self, frame_path: str) -> str:
-    mime_type = mimetypes.guess_type(frame_path)[0] or "image/jpeg"
-    encoded = base64.b64encode(Path(frame_path).read_bytes()).decode("utf-8")
+  def _build_image_inputs(self, frame_paths: list[str]) -> list[str]:
+    if len(frame_paths) > self.max_frame_count:
+      raise ValueError(
+          f"Frame count {len(frame_paths)} exceeds maximum "
+          f"{self.max_frame_count}"
+      )
+
+    image_inputs = []
+    total_image_bytes = 0
+    for frame_path in frame_paths:
+      path = Path(frame_path)
+      mime_type = mimetypes.guess_type(frame_path)[0]
+      if mime_type not in self.allowed_image_mime_types:
+        raise ValueError(
+            f"Unsupported image MIME type {mime_type or 'unknown'} for "
+            f"{frame_path}"
+        )
+
+      image_bytes = path.read_bytes()
+      total_image_bytes += len(image_bytes)
+      if total_image_bytes > self.max_total_image_bytes:
+        raise ValueError(
+            f"Total image bytes {total_image_bytes} exceeds maximum "
+            f"{self.max_total_image_bytes}"
+        )
+      image_inputs.append(self._image_data_url(mime_type, image_bytes))
+
+    return image_inputs
+
+  def _image_data_url(self, mime_type: str, image_bytes: bytes) -> str:
+    encoded = base64.b64encode(image_bytes).decode("utf-8")
     return f"data:{mime_type};base64,{encoded}"
 
   def _loads_json(self, output_text: str) -> dict:
