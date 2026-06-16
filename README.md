@@ -171,6 +171,37 @@ You can see more on the ABCD methodology [here.](https://www.thinkwithgoogle.com
 
 **Note:** This repository provides python modules that can be executed on local machines for easier debugging and troubleshooting.
 
+## Local OpenAI CLI Batch Execution
+
+The CLI can evaluate local videos and YouTube URLs with OpenAI without Google
+Cloud Storage, Video Intelligence, Vertex AI, BigQuery, or Knowledge Graph.
+
+Set your OpenAI API key in the shell:
+
+```bash
+export OPENAI_API_KEY="sk-..."
+```
+
+Run a local sample:
+
+```bash
+python main.py \
+  --llm_provider OPENAI \
+  --creative_provider_type LOCAL,YOUTUBE \
+  --video_uris "sample_videos/google/videos/Youtube_sWaCTG60wPA_Never_run_out_of_the_food_they_love_Chewy.mp4" \
+  --brand_name "Chewy" \
+  --brand_variations "Chewy,chewy.com" \
+  --branded_products "Chewy Pharmacy,Autoship" \
+  --branded_products_categories "pet food,pet medication,pet supplies" \
+  --branded_call_to_actions "shop now,save now,order now" \
+  --run_long_form_abcd \
+  --run_shorts \
+  --assessment_file outputs/abcd_results.json
+```
+
+Private sample videos should live outside git. This repository uses a local
+`sample_videos` symlink for manual testing.
+
 ## Instructions
 Please follow the steps below before executing the ABCDs Detector solution. Every **[VARIABLE]** is a parameter you can configure in the **Define ABCDs Detector Parameters** section.
 
