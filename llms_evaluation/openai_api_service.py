@@ -108,6 +108,7 @@ class OpenAIAPIService:
       user_content.append({
           "type": "input_image",
           "image_url": image_input,
+          "detail": "auto",
       })
 
     return [

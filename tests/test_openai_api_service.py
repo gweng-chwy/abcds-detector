@@ -89,6 +89,7 @@ def test_build_input_includes_text_and_image_data_url(tmp_path):
   assert payload[1]["content"][1] == {
       "type": "input_image",
       "image_url": expected_data_url,
+      "detail": "auto",
   }
 
 

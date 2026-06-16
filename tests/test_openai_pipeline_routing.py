@@ -139,6 +139,63 @@ def test_openai_video_evaluation_uses_configured_frame_limit(monkeypatch):
   assert service_kwargs == [{"max_frame_count": 100}]
 
 
+def test_openai_video_evaluation_filters_configured_features(monkeypatch):
+  """Feature filters limit OpenAI evaluation to requested feature IDs."""
+  from evaluation_services import video_evaluation_service
+  from llms_evaluation import openai_api_service
+  from llms_evaluation import openai_detector
+
+  evaluated_feature_groups = []
+
+  class DetectorStub:
+    def __init__(self, openai_service):
+      pass
+
+    def evaluate_features(self, config, preprocess_result, feature_configs):
+      evaluated_feature_groups.append([feature.id for feature in feature_configs])
+      return [{
+          "id": feature_configs[0].id,
+          "detected": True,
+          "confidence_score": 0.8,
+          "rationale": "Filtered feature evaluated.",
+          "evidence": "Frame 1.",
+          "strengths": "Clear.",
+          "weaknesses": "Sampled.",
+      }]
+
+  monkeypatch.setattr(
+      openai_api_service, "OpenAIAPIService", lambda **kwargs: object()
+  )
+  monkeypatch.setattr(openai_detector, "OpenAIDetector", DetectorStub)
+
+  config = _openai_config()
+  config.features_to_evaluate = ["a_supers"]
+  evaluations = video_evaluation_service.VideoEvaluationService().evaluate_features(
+      config=config,
+      video_uri="sample_videos/ad.mp4",
+      features_category=models.VideoFeatureCategory.LONG_FORM_ABCD,
+      preprocess_result=_preprocess_result(),
+  )
+
+  assert evaluated_feature_groups == [["a_supers"]]
+  assert [evaluation.feature.id for evaluation in evaluations] == ["a_supers"]
+
+
+def test_openai_extract_brand_metadata_requires_explicit_metadata():
+  """OpenAI path rejects metadata inference until it is implemented."""
+  import main
+
+  config = _openai_config()
+  config.extract_brand_metadata = True
+  config.brand_name = None
+  config.brand_variations = []
+  config.branded_products = []
+  config.branded_products_categories = []
+
+  with pytest.raises(ValueError, match="OpenAI metadata extraction"):
+    main.validate_config(config)
+
+
 def test_openai_video_evaluation_requires_preprocess_result():
   """OpenAI evaluation cannot run without preprocessed local evidence."""
   from evaluation_services import video_evaluation_service
@@ -327,3 +384,39 @@ def test_main_help_avoids_google_client_initialization():
 
   assert completed.returncode == 0, completed.stderr
   assert "--llm_provider" in completed.stdout
+
+
+def test_main_cli_failures_exit_nonzero_without_api_key(monkeypatch):
+  """Batch CLI failures are visible to automation through a nonzero exit."""
+  repo_root = Path(__file__).resolve().parents[1]
+  monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+  completed = subprocess.run(
+      [
+          sys.executable,
+          "main.py",
+          "--llm_provider",
+          "OPENAI",
+          "--creative_provider_type",
+          "LOCAL",
+          "--video_uris",
+          "sample_videos/ad.mp4",
+          "-brand_name",
+          "Chewy",
+          "-brand_variations",
+          "Chewy",
+          "-branded_products",
+          "Chewy Pharmacy",
+          "-branded_products_categories",
+          "pet supplies",
+          "-run_long_form_abcd",
+      ],
+      cwd=repo_root,
+      check=False,
+      capture_output=True,
+      text=True,
+      env={},
+  )
+
+  assert completed.returncode != 0
+  assert "OPENAI_API_KEY" in completed.stderr

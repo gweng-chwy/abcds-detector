@@ -56,6 +56,10 @@ class VideoEvaluationService:
     llm_evals = []
 
     for feature_configs in feature_groups.values():
+      feature_configs = self._filter_feature_configs(config, feature_configs)
+      if not feature_configs:
+        continue
+
       if config.use_llms and not config.use_annotations:
         feature_configs_handler.features_configs_handler.change_evaluation_method_to_llms_only(
             feature_configs
@@ -70,6 +74,22 @@ class VideoEvaluationService:
       )
 
     return self._build_feature_evaluations(llm_evals, features_category)
+
+  def _filter_feature_configs(
+      self,
+      config: configuration.Configuration,
+      feature_configs: list[models.VideoFeature],
+  ) -> list[models.VideoFeature]:
+    """Return requested feature configs when feature filtering is configured."""
+    if not config.features_to_evaluate:
+      return feature_configs
+
+    requested_feature_ids = set(config.features_to_evaluate)
+    return [
+        feature_config
+        for feature_config in feature_configs
+        if feature_config.id in requested_feature_ids
+    ]
 
   def _evaluate_features_with_legacy(
       self,
@@ -103,6 +123,9 @@ class VideoEvaluationService:
 
     for group_key in feature_groups:
       feature_configs: list[models.VideoFeature] = feature_groups.get(group_key)
+      feature_configs = self._filter_feature_configs(config, feature_configs)
+      if not feature_configs:
+        continue
 
       # Use LLM evaluation method only
       if config.use_llms and not config.use_annotations:

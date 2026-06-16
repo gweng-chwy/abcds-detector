@@ -143,9 +143,16 @@ def test_main_writes_assessment_json_when_assessment_file_set(
       "OPENAI",
       "--video_uris",
       "sample_videos/ad.mp4",
+      "-brand_name",
+      "Chewy",
+      "-brand_variations",
+      "Chewy",
+      "-branded_products",
+      "Chewy Pharmacy",
+      "-branded_products_categories",
+      "pet supplies",
       "-assessment_file",
       str(output),
-      "-extract_brand_metadata",
   ])
 
   assert write_calls == [([assessment], str(output))]

@@ -79,6 +79,15 @@ def test_blank_video_uris_are_ignored():
   assert config.video_uris == []
 
 
+def test_features_to_evaluate_long_alias_parses():
+  """Documented double-dash feature filter alias is supported."""
+  args = utils.parse_args(["--features_to_evaluate", "a_supers,b_brand_visuals"])
+
+  config = utils.build_abcd_params_config(args)
+
+  assert config.features_to_evaluate == ["a_supers", "b_brand_visuals"]
+
+
 def test_legacy_video_and_provider_aliases_still_parse():
   """Legacy single-dash and short provider aliases remain supported."""
   legacy_long_args = utils.parse_args([

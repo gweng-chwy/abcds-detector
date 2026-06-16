@@ -237,6 +237,7 @@ def parse_args(arg_list: list[str] | None = None) -> argparse.Namespace:
       default=1.0,
   )
   parser.add_argument(
+      "--features_to_evaluate",
       "-features_to_evaluate",
       "-fteval",
       help="List of features to evaluate",

@@ -23,6 +23,7 @@
 import time
 import traceback
 import logging
+import sys
 import models
 import utils
 from configuration import Configuration
@@ -230,11 +231,41 @@ def execute_abcd_assessment_for_videos(
   return video_assessments
 
 
-def main(arg_list: list[str] | None = None) -> None:
+def validate_config(config: Configuration) -> None:
+  """Validate CLI configuration before execution."""
+  if (
+      config.llm_provider_type == models.LLMProviderType.OPENAI
+      and config.extract_brand_metadata
+      and _missing_brand_metadata(config)
+  ):
+    raise ValueError(
+        "OpenAI metadata extraction is not implemented yet. Provide explicit "
+        "brand and product metadata, or omit -extract_brand_metadata."
+    )
+
+  if utils.invalid_brand_metadata(config):
+    raise ValueError(
+        "The Extract Brand Metadata option is disabled and no brand details "
+        "were defined. Please enable the option or define brand details."
+    )
+
+
+def _missing_brand_metadata(config: Configuration) -> bool:
+  """Return whether required brand metadata is missing."""
+  return (
+      not config.brand_name
+      or len(config.brand_variations) == 0
+      or len(config.branded_products) == 0
+      or len(config.branded_products_categories) == 0
+  )
+
+
+def main(arg_list: list[str] | None = None, raise_on_error: bool = False) -> None:
   """Main ABCD Assessment execution. See docstring and args.
 
   Args:
     arg_list: A list of command line arguments
+    raise_on_error: Re-raise exceptions so command line execution exits nonzero.
 
   """
 
@@ -242,14 +273,7 @@ def main(arg_list: list[str] | None = None) -> None:
     args = utils.parse_args(arg_list)
 
     config = utils.build_abcd_params_config(args)
-
-    if utils.invalid_brand_metadata(config):
-      logging.error(
-          "The Extract Brand Metadata option is disabled and no brand details"
-          " were defined. \n"
-      )
-      logging.error("Please enable the option or define brand details. \n")
-      return
+    validate_config(config)
 
     start_time = time.time()
     logging.info("Starting ABCD assessment... \n")
@@ -273,7 +297,12 @@ def main(arg_list: list[str] | None = None) -> None:
   except Exception as ex:
     logging.error("ERROR: %s", ex)
     traceback.print_exc()
+    if raise_on_error:
+      raise
 
 
 if __name__ == "__main__":
-  main()
+  try:
+    main(raise_on_error=True)
+  except Exception:
+    sys.exit(1)
