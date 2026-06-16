@@ -255,7 +255,14 @@ def main(arg_list: list[str] | None = None) -> None:
     logging.info("Starting ABCD assessment... \n")
 
     if config.video_uris:
-      execute_abcd_assessment_for_videos(config)
+      video_assessments = execute_abcd_assessment_for_videos(config)
+      if config.assessment_file and video_assessments:
+        from helpers import generic_helpers
+
+        generic_helpers.write_assessments_json(
+            video_assessments,
+            config.assessment_file,
+        )
       logging.info("Finished ABCD assessment. \n")
     else:
       logging.info("There are no videos to process. \n")
