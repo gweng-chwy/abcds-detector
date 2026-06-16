@@ -25,63 +25,136 @@ import traceback
 import logging
 import models
 import utils
-from annotations_evaluation import annotations_generation
-from helpers import generic_helpers
 from configuration import Configuration
-from creative_providers import creative_provider_proto
-from creative_providers import creative_provider_registry
-from evaluation_services import video_evaluation_service
 
 
-def execute_abcd_assessment_for_videos(config: Configuration):
-  """Execute ABCD Assessment for all brand videos retrieved by the Creative Provider"""
+def get_video_sources(config: Configuration) -> list[models.VideoSource]:
+  """Resolve configured video inputs without loading unused providers."""
+  if config.llm_provider_type == models.LLMProviderType.OPENAI:
+    from creative_providers.local_creative_provider import LocalCreativeProvider
 
-  creative_provider: creative_provider_proto.CreativeProviderProto = (
-      creative_provider_registry.provider_factory.get_provider(
-          config.creative_provider_type.value
+    return LocalCreativeProvider().get_creative_sources(config)
+
+  from creative_providers import creative_provider_registry
+
+  creative_provider = creative_provider_registry.provider_factory.get_provider(
+      config.creative_provider_type.value
+  )
+  return [
+      models.VideoSource(
+          original_uri=video_uri,
+          local_path=video_uri,
+          source_type=config.creative_provider_type.value,
       )
+      for video_uri in creative_provider.get_creative_uris(config)
+  ]
+
+
+def _validate_legacy_video_uri(config: Configuration, video_uri: str) -> bool:
+  """Validate provider-specific URI shape for legacy providers."""
+  if (
+      config.creative_provider_type == models.CreativeProviderType.GCS
+      and "gs://" not in video_uri
+  ):
+    logging.error(
+        "The creative provider GCS does not match with the video uri"
+        f" {video_uri}. Stopping execution. Please check."
+    )
+    return False
+
+  if (
+      config.creative_provider_type == models.CreativeProviderType.YOUTUBE
+      and "https://www.youtube.com" not in video_uri
+  ):
+    logging.error(
+        "The creative provider YOUTUBE does not match with the video uri"
+        f" {video_uri}. Stopping execution. Please check."
+    )
+    return False
+
+  return True
+
+
+def _build_openai_preprocessor(config: Configuration):
+  """Build the OpenAI preprocessing pipeline."""
+  from llms_evaluation import openai_api_service
+  from llms_evaluation import openai_video_preprocessor
+
+  openai_service = openai_api_service.OpenAIAPIService()
+  return openai_video_preprocessor.VideoPreprocessor(
+      cache_dir=config.cache_dir,
+      max_frames=config.max_frames,
+      frame_sample_rate=config.frame_sample_rate,
+      openai_service=openai_service,
   )
 
-  video_uris = creative_provider.get_creative_uris(config)
 
-  for video_uri in video_uris:
+def _print_assessment_summary(
+    video_assessment: models.VideoAssessment,
+    long_form_abcd_evaluated_features: list[models.FeatureEvaluation],
+    shorts_evaluated_features: list[models.FeatureEvaluation],
+) -> None:
+  """Print a compact assessment summary without loading Google helpers."""
+  for label, evaluated_features in (
+      ("Full ABCD", long_form_abcd_evaluated_features),
+      ("Shorts", shorts_evaluated_features),
+  ):
+    if not evaluated_features:
+      logging.info("There are not %s evaluated features results to display.", label)
+      continue
+
+    print(
+        "\n"
+        f"{label} assessment for {video_assessment.brand_name} "
+        f"({video_assessment.video_uri})"
+    )
+    for feature_eval in evaluated_features:
+      print(
+          f"- {feature_eval.feature.id}: detected={feature_eval.detected}, "
+          f"confidence={feature_eval.confidence_score}"
+      )
+
+
+def execute_abcd_assessment_for_videos(
+    config: Configuration,
+) -> list[models.VideoAssessment]:
+  """Execute ABCD Assessment for all brand videos retrieved by the Creative Provider"""
+  from evaluation_services import video_evaluation_service
+
+  video_sources = get_video_sources(config)
+  video_assessments = []
+  is_openai = config.llm_provider_type == models.LLMProviderType.OPENAI
+  openai_preprocessor = _build_openai_preprocessor(config) if is_openai else None
+
+  for video_source in video_sources:
+    video_uri = video_source.original_uri
 
     # Validate that creative provides match the video uris
-    if (
-        config.creative_provider_type == models.CreativeProviderType.GCS
-        and "gs://" not in video_uri
-    ):
-      logging.error(
-          "The creative provider GCS does not match with the video uri"
-          f" {video_uri}. Stopping execution. Please check."
-      )
-      break
-
-    if (
-        config.creative_provider_type == models.CreativeProviderType.YOUTUBE
-        and "https://www.youtube.com" not in video_uri
-    ):
-      logging.error(
-          "The creative provider YOUTUBE does not match with the video uri"
-          f" {video_uri}. Stopping execution. Please check."
-      )
+    if not is_openai and not _validate_legacy_video_uri(config, video_uri):
       break
 
     print(f"\n\nProcessing ABCD Assessment for video {video_uri}... \n")
 
-    # Generate video annotations for custom features. Annotations are supported only for GCS providers
-    if (
-        config.use_annotations
-        and config.creative_provider_type == models.CreativeProviderType.GCS
-    ):
-      annotations_generation.generate_video_annotations(config, video_uri)
+    preprocess_result = None
+    if is_openai:
+      preprocess_result = openai_preprocessor.preprocess(video_source)
+    else:
+      from annotations_evaluation import annotations_generation
+      from helpers import generic_helpers
 
-    # Full ABCD features require 1st_5_secs videos only for GCS providers
-    if (
-        config.run_long_form_abcd
-        and config.creative_provider_type == models.CreativeProviderType.GCS
-    ):
-      generic_helpers.trim_video(config, video_uri)
+      # Generate video annotations for custom features. Annotations are supported only for GCS providers
+      if (
+          config.use_annotations
+          and config.creative_provider_type == models.CreativeProviderType.GCS
+      ):
+        annotations_generation.generate_video_annotations(config, video_uri)
+
+      # Full ABCD features require 1st_5_secs videos only for GCS providers
+      if (
+          config.run_long_form_abcd
+          and config.creative_provider_type == models.CreativeProviderType.GCS
+      ):
+        generic_helpers.trim_video(config, video_uri)
 
     # Execute ABCD Assessment
     long_form_abcd_evaluated_features: models.FeatureEvaluation = []
@@ -93,6 +166,7 @@ def execute_abcd_assessment_for_videos(config: Configuration):
               config=config,
               video_uri=video_uri,
               features_category=models.VideoFeatureCategory.LONG_FORM_ABCD,
+              preprocess_result=preprocess_result,
           )
       )
 
@@ -102,6 +176,7 @@ def execute_abcd_assessment_for_videos(config: Configuration):
               config=config,
               video_uri=video_uri,
               features_category=models.VideoFeatureCategory.SHORTS,
+              preprocess_result=preprocess_result,
           )
       )
 
@@ -114,32 +189,44 @@ def execute_abcd_assessment_for_videos(config: Configuration):
     )
 
     # Print assessments for Full ABCD and Shorts and store results
-    if len(long_form_abcd_evaluated_features) > 0:
-      generic_helpers.print_abcd_assessment(
-          video_assessment.brand_name,
-          video_assessment.video_uri,
+    if is_openai:
+      _print_assessment_summary(
+          video_assessment,
           long_form_abcd_evaluated_features,
-      )
-    else:
-      logging.info(
-          "There are not Full ABCD evaluated features results to display."
-      )
-    if len(shorts_evaluated_features) > 0:
-      generic_helpers.print_abcd_assessment(
-          video_assessment.brand_name,
-          video_assessment.video_uri,
           shorts_evaluated_features,
       )
     else:
-      logging.info(
-          "There are not Shorts evaluated features results to display."
-      )
+      if len(long_form_abcd_evaluated_features) > 0:
+        generic_helpers.print_abcd_assessment(
+            video_assessment.brand_name,
+            video_assessment.video_uri,
+            long_form_abcd_evaluated_features,
+        )
+      else:
+        logging.info(
+            "There are not Full ABCD evaluated features results to display."
+        )
+      if len(shorts_evaluated_features) > 0:
+        generic_helpers.print_abcd_assessment(
+            video_assessment.brand_name,
+            video_assessment.video_uri,
+            shorts_evaluated_features,
+        )
+      else:
+        logging.info(
+            "There are not Shorts evaluated features results to display."
+        )
 
-    if config.bq_table_name:
+    if config.bq_table_name and not is_openai:
       generic_helpers.store_in_bq(config, video_assessment)
 
     # Remove local version of video files
-    generic_helpers.remove_local_video_files()
+    if not is_openai:
+      generic_helpers.remove_local_video_files()
+
+    video_assessments.append(video_assessment)
+
+  return video_assessments
 
 
 def main(arg_list: list[str] | None = None) -> None:
