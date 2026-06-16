@@ -5,32 +5,38 @@
 import importlib
 import json
 import sys
-import types
 
 import models
 
 
-def _import_generic_helpers_without_google_clients(monkeypatch):
-  """Import generic_helpers with Google-heavy modules stubbed."""
-  bigquery_module = types.ModuleType("google.cloud.bigquery")
-  bigquery_module.SchemaField = object
-  monkeypatch.setitem(sys.modules, "google", types.ModuleType("google"))
-  monkeypatch.setitem(sys.modules, "google.cloud", types.ModuleType("google.cloud"))
-  monkeypatch.setitem(sys.modules, "google.cloud.bigquery", bigquery_module)
-  monkeypatch.setitem(
-      sys.modules, "moviepy.editor", types.ModuleType("moviepy.editor")
-  )
-  sys.modules["moviepy.editor"].VideoFileClip = object
-  bigquery_service = types.ModuleType("gcp_api_services.bigquery_api_service")
-  bigquery_service.BigQueryAPIService = object
-  monkeypatch.setitem(
-      sys.modules, "gcp_api_services.bigquery_api_service", bigquery_service
-  )
-  gcs_service = types.ModuleType("gcp_api_services.gcs_api_service")
-  gcs_service.gcs_api_service = object()
-  monkeypatch.setitem(sys.modules, "gcp_api_services.gcs_api_service", gcs_service)
+_FORBIDDEN_IMPORTS = (
+    "google.cloud.bigquery",
+    "moviepy.editor",
+    "gcp_api_services.bigquery_api_service",
+    "gcp_api_services.gcs_api_service",
+)
+
+
+class _BlockImports:
+  """Import hook that fails when forbidden modules are imported."""
+
+  def find_spec(self, fullname, path=None, target=None):
+    if fullname in _FORBIDDEN_IMPORTS:
+      raise AssertionError(f"{fullname} imported at module load")
+    return None
+
+
+def _import_generic_helpers_with_google_import_guard(monkeypatch):
+  """Import generic_helpers and fail if it imports Google-heavy modules."""
   sys.modules.pop("helpers.generic_helpers", None)
-  return importlib.import_module("helpers.generic_helpers")
+  for module_name in _FORBIDDEN_IMPORTS:
+    monkeypatch.delitem(sys.modules, module_name, raising=False)
+  import_guard = _BlockImports()
+  sys.meta_path.insert(0, import_guard)
+  try:
+    return importlib.import_module("helpers.generic_helpers")
+  finally:
+    sys.meta_path.remove(import_guard)
 
 
 def _feature(feature_id="a_supers"):
@@ -64,7 +70,7 @@ def _feature_eval(feature_id="a_supers"):
 
 def test_write_assessments_json(tmp_path, monkeypatch):
   """JSON writer serializes assessments and creates parent directories."""
-  generic_helpers = _import_generic_helpers_without_google_clients(monkeypatch)
+  generic_helpers = _import_generic_helpers_with_google_import_guard(monkeypatch)
   assessment = models.VideoAssessment(
       brand_name="Chewy",
       video_uri="sample_videos/ad.mp4",
