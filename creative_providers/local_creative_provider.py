@@ -1,8 +1,10 @@
 """Creative provider for local files and direct YouTube URLs."""
 
+from __future__ import annotations
+
+from typing import Any
 from urllib import parse
 
-import configuration
 import models
 
 
@@ -29,13 +31,11 @@ class LocalCreativeProvider:
   def __init__(self):
     pass
 
-  def get_creative_uris(self, config: configuration.Configuration) -> list[str]:
+  def get_creative_uris(self, config: Any) -> list[str]:
     """Return configured video URIs for compatibility with legacy callers."""
     return config.video_uris
 
-  def get_creative_sources(
-      self, config: configuration.Configuration
-  ) -> list[models.VideoSource]:
+  def get_creative_sources(self, config: Any) -> list[models.VideoSource]:
     """Resolve configured URIs into typed video source objects."""
     sources = []
     for uri in config.video_uris:
