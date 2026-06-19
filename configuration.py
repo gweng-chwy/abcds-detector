@@ -158,7 +158,11 @@ class Configuration:
         if frame_sample_rate is not None
         else self.frame_sample_rate
     )
-    self.refresh_cache = bool(refresh_cache)
+    self.refresh_cache = (
+        bool(refresh_cache)
+        if refresh_cache is not None
+        else self.refresh_cache
+    )
 
     self.creative_provider_types = self._parse_creative_provider_types(
         creative_provider_type

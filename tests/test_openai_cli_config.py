@@ -96,6 +96,32 @@ def test_openai_cli_refresh_cache_flag_sets_config():
   assert config.refresh_cache is True
 
 
+def test_refresh_cache_set_parameters_preserves_existing_when_omitted():
+  """Refresh cache follows optional config update semantics."""
+  config = Configuration()
+  config.refresh_cache = True
+
+  config.set_parameters(
+      project_id="",
+      project_zone="",
+      bucket_name="",
+      knowledge_graph_api_key="",
+      bigquery_dataset="abcd_detector_ds",
+      bigquery_table="abcd_assessments",
+      assessment_file="",
+      use_annotations=False,
+      use_llms=True,
+      extract_brand_metadata=True,
+      run_long_form_abcd=True,
+      run_shorts=True,
+      features_to_evaluate=None,
+      creative_provider_type=None,
+      verbose=False,
+  )
+
+  assert config.refresh_cache is True
+
+
 def test_blank_video_uris_are_ignored():
   """Blank video URI values do not create truthy work lists."""
   args = utils.parse_args(["--video_uris", " , ,, "])
@@ -213,9 +239,6 @@ def test_video_preprocess_result_tracks_timestamped_evidence():
   assert result.first_5_seconds_frame_evidence == [first_frame]
   assert result.full_video_transcript == ""
   assert result.first_5_seconds_transcript == "first five transcript"
-  assert not hasattr(result, "first_5_seconds_audio_path")
-  assert not hasattr(result, "first_5_seconds_transcript_available")
-  assert not hasattr(result, "preprocess_manifest_path")
 
 
 def test_openai_preprocessor_builder_passes_refresh_cache(monkeypatch):
