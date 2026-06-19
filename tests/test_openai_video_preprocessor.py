@@ -14,12 +14,71 @@ from llms_evaluation.openai_video_preprocessor import (
 )
 
 
+def _write_exact_frame_output(cmd):
+  output_path = Path(cmd[-1])
+  assert "%" not in output_path.name
+  output_path.write_bytes(b"frame")
+
+
 def test_build_cache_key_returns_stable_sha256_prefix():
   """Cache keys are stable 16-character sha256 prefixes."""
   uri = "https://www.youtube.com/watch?v=test"
 
   assert build_cache_key(uri) == hashlib.sha256(uri.encode("utf-8")).hexdigest()[:16]
   assert len(build_cache_key(uri)) == 16
+
+
+def test_full_video_frame_timestamps_are_uniform_across_duration(tmp_path):
+  """Full-video frame timestamps are evenly distributed across the video."""
+  preprocessor = VideoPreprocessor(
+      cache_dir=str(tmp_path / "cache"),
+      max_frames=4,
+      frame_sample_rate=1.0,
+      openai_service=object(),
+  )
+
+  assert preprocessor._full_video_timestamps(10.0) == [0.0, 3.33, 6.67, 10.0]
+
+
+def test_first_5s_frame_timestamps_are_capped_by_duration(tmp_path):
+  """First-5-second frame timestamps stop at the shorter source duration."""
+  preprocessor = VideoPreprocessor(
+      cache_dir=str(tmp_path / "cache"),
+      max_frames=24,
+      frame_sample_rate=2.0,
+      openai_service=object(),
+  )
+
+  assert preprocessor._first_5s_timestamps(3.0) == [
+      0.0,
+      0.5,
+      1.0,
+      1.5,
+      2.0,
+      2.5,
+      3.0,
+  ]
+
+
+def test_frame_timestamps_fall_back_to_zero_for_empty_or_single_frame(tmp_path):
+  """Timestamp helpers always return zero for empty videos or single-frame caps."""
+  zero_duration_preprocessor = VideoPreprocessor(
+      cache_dir=str(tmp_path / "cache"),
+      max_frames=4,
+      frame_sample_rate=2.0,
+      openai_service=object(),
+  )
+  single_frame_preprocessor = VideoPreprocessor(
+      cache_dir=str(tmp_path / "cache"),
+      max_frames=1,
+      frame_sample_rate=2.0,
+      openai_service=object(),
+  )
+
+  assert zero_duration_preprocessor._full_video_timestamps(0.0) == [0.0]
+  assert zero_duration_preprocessor._first_5s_timestamps(-1.0) == [0.0]
+  assert single_frame_preprocessor._full_video_timestamps(10.0) == [0.0]
+  assert single_frame_preprocessor._first_5s_timestamps(10.0) == [0.0]
 
 
 def test_local_source_requires_existing_path(tmp_path):
@@ -40,10 +99,10 @@ def test_local_source_requires_existing_path(tmp_path):
     preprocessor.preprocess(source)
 
 
-def test_local_preprocessing_extracts_media_and_returns_transcript(
+def test_local_preprocessing_extracts_first_5s_audio_and_transcript(
     tmp_path, monkeypatch
 ):
-  """Local preprocessing returns duration, frames, audio path, and transcript."""
+  """Local preprocessing returns timestamped frame and transcript evidence."""
   video_path = tmp_path / "video.mp4"
   video_path.write_bytes(b"video")
   cache_dir = tmp_path / "cache"
@@ -57,11 +116,12 @@ def test_local_preprocessing_extracts_media_and_returns_transcript(
   class FakeOpenAIService:
 
     def transcribe_audio(self, audio_path, model_name="gpt-4o-transcribe"):
-      assert audio_path == str(
-          cache_dir / build_cache_key(str(video_path)) / "audio.mp3"
-      )
       assert model_name == "gpt-4o-transcribe"
-      return "hello there"
+      if audio_path.endswith("audio_first_5s.mp3"):
+        return "first five words"
+      if audio_path.endswith("audio.mp3"):
+        return "full transcript"
+      raise AssertionError(f"unexpected audio path: {audio_path}")
 
   def fake_run(cmd, check, capture_output, text, timeout):
     assert check is True
@@ -72,9 +132,7 @@ def test_local_preprocessing_extracts_media_and_returns_transcript(
     if cmd[0] == "ffprobe":
       return SimpleNamespace(stdout="12.5\n")
     if cmd[0] == "ffmpeg" and cmd[-1].endswith(".jpg"):
-      output_pattern = Path(cmd[-1])
-      (output_pattern.parent / "frame_0001.jpg").write_bytes(b"frame")
-      (output_pattern.parent / "frame_0002.jpg").write_bytes(b"frame")
+      _write_exact_frame_output(cmd)
     if cmd[0] == "ffmpeg" and cmd[-1].endswith(".mp3"):
       Path(cmd[-1]).write_bytes(b"audio")
     return SimpleNamespace(stdout="")
@@ -89,41 +147,27 @@ def test_local_preprocessing_extracts_media_and_returns_transcript(
   ).preprocess(source)
 
   video_cache_dir = cache_dir / build_cache_key(str(video_path))
-  assert commands == [
-      [
-          "ffprobe",
-          "-v",
-          "error",
-          "-show_entries",
-          "format=duration",
-          "-of",
-          "default=noprint_wrappers=1:nokey=1",
-          str(video_path),
-      ],
-      [
-          "ffmpeg",
-          "-y",
-          "-i",
-          str(video_path),
-          "-vf",
-          "fps=0.5",
-          "-frames:v",
-          "4",
-          str(video_cache_dir / "frames" / "full" / "frame_%04d.jpg"),
-      ],
-      [
-          "ffmpeg",
-          "-y",
-          "-t",
-          "5",
-          "-i",
-          str(video_path),
-          "-vf",
-          "fps=0.5",
-          "-frames:v",
-          "4",
-          str(video_cache_dir / "frames" / "first_5s" / "frame_%04d.jpg"),
-      ],
+  ffprobe_commands = [cmd for cmd in commands if cmd[0] == "ffprobe"]
+  frame_commands = [
+      cmd for cmd in commands if cmd[0] == "ffmpeg" and cmd[-1].endswith(".jpg")
+  ]
+  audio_commands = [
+      cmd for cmd in commands if cmd[0] == "ffmpeg" and cmd[-1].endswith(".mp3")
+  ]
+  assert ffprobe_commands == [[
+      "ffprobe",
+      "-v",
+      "error",
+      "-show_entries",
+      "format=duration",
+      "-of",
+      "default=noprint_wrappers=1:nokey=1",
+      str(video_path),
+  ]]
+  assert len(frame_commands) == 8
+  assert all("-ss" in cmd for cmd in frame_commands)
+  assert all(cmd[-1].endswith(".jpg") for cmd in frame_commands)
+  assert audio_commands == [
       [
           "ffmpeg",
           "-y",
@@ -141,22 +185,53 @@ def test_local_preprocessing_extracts_media_and_returns_transcript(
           "64k",
           str(video_cache_dir / "audio.mp3"),
       ],
+      [
+          "ffmpeg",
+          "-y",
+          "-t",
+          "5",
+          "-i",
+          str(video_path),
+          "-map",
+          "0:a:0",
+          "-ac",
+          "1",
+          "-ar",
+          "16000",
+          "-codec:a",
+          "libmp3lame",
+          "-b:a",
+          "64k",
+          str(video_cache_dir / "audio_first_5s.mp3"),
+      ],
   ]
-  assert result == models.VideoPreprocessResult(
-      source=source,
-      duration_seconds=12.5,
-      full_video_frames=[
-          str(video_cache_dir / "frames" / "full" / "frame_0001.jpg"),
-          str(video_cache_dir / "frames" / "full" / "frame_0002.jpg"),
-      ],
-      first_5_seconds_frames=[
-          str(video_cache_dir / "frames" / "first_5s" / "frame_0001.jpg"),
-          str(video_cache_dir / "frames" / "first_5s" / "frame_0002.jpg"),
-      ],
-      audio_path=str(video_cache_dir / "audio.mp3"),
-      transcript="hello there",
-      transcript_available=True,
+  assert result.full_video_frames == [
+      str(video_cache_dir / "frames" / "full" / "frame_0001.jpg"),
+      str(video_cache_dir / "frames" / "full" / "frame_0002.jpg"),
+      str(video_cache_dir / "frames" / "full" / "frame_0003.jpg"),
+      str(video_cache_dir / "frames" / "full" / "frame_0004.jpg"),
+  ]
+  assert result.first_5_seconds_frames == [
+      str(video_cache_dir / "frames" / "first_5s" / "frame_0001.jpg"),
+      str(video_cache_dir / "frames" / "first_5s" / "frame_0002.jpg"),
+      str(video_cache_dir / "frames" / "first_5s" / "frame_0003.jpg"),
+      str(video_cache_dir / "frames" / "first_5s" / "frame_0004.jpg"),
+  ]
+  assert result.audio_path == str(video_cache_dir / "audio.mp3")
+  assert result.transcript == "full transcript"
+  assert result.full_video_transcript == "full transcript"
+  assert result.transcript_available is True
+  assert result.first_5_seconds_audio_path == str(
+      video_cache_dir / "audio_first_5s.mp3"
   )
+  assert result.first_5_seconds_transcript == "first five words"
+  assert result.first_5_seconds_transcript_available is True
+  assert [
+      frame.timestamp_seconds for frame in result.full_video_frame_evidence
+  ] == [0.0, 4.17, 8.33, 12.5]
+  assert [
+      frame.timestamp_seconds for frame in result.first_5_seconds_frame_evidence
+  ] == [0.0, 2.0, 4.0, 5.0]
 
 
 def test_local_preprocessing_uses_configured_transcription_model(
@@ -187,8 +262,7 @@ def test_local_preprocessing_uses_configured_transcription_model(
     if cmd[0] == "ffprobe":
       return SimpleNamespace(stdout="12.5\n")
     if cmd[0] == "ffmpeg" and cmd[-1].endswith(".jpg"):
-      output_pattern = Path(cmd[-1])
-      (output_pattern.parent / "frame_0001.jpg").write_bytes(b"frame")
+      _write_exact_frame_output(cmd)
     if cmd[0] == "ffmpeg" and cmd[-1].endswith(".mp3"):
       Path(cmd[-1]).write_bytes(b"audio")
     return SimpleNamespace(stdout="")
@@ -203,10 +277,20 @@ def test_local_preprocessing_uses_configured_transcription_model(
       transcription_model="gpt-custom-transcribe",
   ).preprocess(source)
 
-  assert transcription_calls == [(
-      str(cache_dir / build_cache_key(str(video_path)) / "audio.mp3"),
-      "gpt-custom-transcribe",
-  )]
+  assert transcription_calls == [
+      (
+          str(cache_dir / build_cache_key(str(video_path)) / "audio.mp3"),
+          "gpt-custom-transcribe",
+      ),
+      (
+          str(
+              cache_dir
+              / build_cache_key(str(video_path))
+              / "audio_first_5s.mp3"
+          ),
+          "gpt-custom-transcribe",
+      ),
+  ]
   assert result.transcript == "configured transcript"
 
 
@@ -239,8 +323,7 @@ def test_youtube_preprocessing_downloads_before_extracting(tmp_path, monkeypatch
     if cmd[0] == "ffprobe":
       return SimpleNamespace(stdout="8.0\n")
     if cmd[0] == "ffmpeg" and cmd[-1].endswith(".jpg"):
-      output_pattern = Path(cmd[-1])
-      (output_pattern.parent / "frame_0001.jpg").write_bytes(b"frame")
+      _write_exact_frame_output(cmd)
     if cmd[0] == "ffmpeg" and cmd[-1].endswith(".mp3"):
       Path(cmd[-1]).write_bytes(b"audio")
     return SimpleNamespace(stdout="")
@@ -311,8 +394,7 @@ def test_youtube_preprocessing_ignores_stale_hash_scoped_sources(
     if cmd[0] == "ffprobe":
       return SimpleNamespace(stdout="9.0\n")
     if cmd[0] == "ffmpeg" and cmd[-1].endswith(".jpg"):
-      output_pattern = Path(cmd[-1])
-      (output_pattern.parent / "frame_0001.jpg").write_bytes(b"frame")
+      _write_exact_frame_output(cmd)
     if cmd[0] == "ffmpeg" and cmd[-1].endswith(".mp3"):
       Path(cmd[-1]).write_bytes(b"audio")
     return SimpleNamespace(stdout="")
@@ -355,8 +437,7 @@ def test_transcription_failure_does_not_fail_preprocessing(tmp_path, monkeypatch
     if cmd[0] == "ffprobe":
       return SimpleNamespace(stdout="3.0\n")
     if cmd[0] == "ffmpeg" and cmd[-1].endswith(".jpg"):
-      output_pattern = Path(cmd[-1])
-      (output_pattern.parent / "frame_0001.jpg").write_bytes(b"frame")
+      _write_exact_frame_output(cmd)
     if cmd[0] == "ffmpeg" and cmd[-1].endswith(".mp3"):
       Path(cmd[-1]).write_bytes(b"audio")
     return SimpleNamespace(stdout="")
@@ -404,8 +485,7 @@ def test_audio_extraction_failure_does_not_fail_preprocessing(tmp_path, monkeypa
     if cmd[0] == "ffprobe":
       return SimpleNamespace(stdout="3.0\n")
     if cmd[0] == "ffmpeg" and cmd[-1].endswith(".jpg"):
-      output_pattern = Path(cmd[-1])
-      (output_pattern.parent / "frame_0001.jpg").write_bytes(b"frame")
+      _write_exact_frame_output(cmd)
     if cmd[0] == "ffmpeg" and cmd[-1].endswith(".mp3"):
       raise preprocessor_module.subprocess.CalledProcessError(
           returncode=1,

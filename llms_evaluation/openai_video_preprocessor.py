@@ -42,6 +42,7 @@ class VideoPreprocessor:
     full_frames_dir = video_dir / "frames" / "full"
     first_frames_dir = video_dir / "frames" / "first_5s"
     audio_path = video_dir / "audio.mp3"
+    first_5s_audio_path = video_dir / "audio_first_5s.mp3"
     full_frames_dir.mkdir(parents=True, exist_ok=True)
     first_frames_dir.mkdir(parents=True, exist_ok=True)
     audio_path.parent.mkdir(parents=True, exist_ok=True)
@@ -49,15 +50,24 @@ class VideoPreprocessor:
       for stale_frame in frames_dir.glob("*.jpg"):
         if stale_frame.is_file():
           stale_frame.unlink()
-    if audio_path.exists():
-      audio_path.unlink()
+    for stale_audio_path in (audio_path, first_5s_audio_path):
+      if stale_audio_path.exists():
+        stale_audio_path.unlink()
 
     duration_seconds = self._probe_duration(local_source.local_path)
-    self._extract_frames(local_source.local_path, full_frames_dir)
+    full_video_frame_evidence = self._extract_frames_at_timestamps(
+        local_source.local_path,
+        full_frames_dir,
+        self._full_video_timestamps(duration_seconds),
+    )
     full_video_frames = self._list_frames(full_frames_dir)
     if not full_video_frames:
       raise RuntimeError(f"No frames extracted for full video: {full_frames_dir}")
-    self._extract_first_5s_frames(local_source.local_path, first_frames_dir)
+    first_5_seconds_frame_evidence = self._extract_frames_at_timestamps(
+        local_source.local_path,
+        first_frames_dir,
+        self._first_5s_timestamps(duration_seconds),
+    )
     first_5_seconds_frames = self._list_frames(first_frames_dir)
     if not first_5_seconds_frames:
       raise RuntimeError(
@@ -67,13 +77,17 @@ class VideoPreprocessor:
       self._extract_audio(local_source.local_path, audio_path)
       audio_available = audio_path.exists()
     except RuntimeError:
-      if audio_path.exists():
-        audio_path.unlink()
+      for failed_audio_path in (audio_path, first_5s_audio_path):
+        if failed_audio_path.exists():
+          failed_audio_path.unlink()
       audio_available = False
 
     transcript = ""
     transcript_available = False
     result_audio_path = None
+    first_5_seconds_transcript = ""
+    first_5_seconds_transcript_available = False
+    result_first_5s_audio_path = None
     if audio_available:
       result_audio_path = str(audio_path)
       try:
@@ -84,6 +98,21 @@ class VideoPreprocessor:
       except Exception:
         transcript = ""
         transcript_available = False
+      try:
+        self._extract_first_5s_audio(local_source.local_path, first_5s_audio_path)
+        if first_5s_audio_path.exists():
+          first_5_seconds_transcript = self.openai_service.transcribe_audio(
+              str(first_5s_audio_path), model_name=self.transcription_model
+          )
+          first_5_seconds_transcript_available = bool(
+              first_5_seconds_transcript
+          )
+          if first_5_seconds_transcript_available:
+            result_first_5s_audio_path = str(first_5s_audio_path)
+      except Exception:
+        first_5_seconds_transcript = ""
+        first_5_seconds_transcript_available = False
+        result_first_5s_audio_path = None
 
     return models.VideoPreprocessResult(
         source=local_source,
@@ -93,6 +122,14 @@ class VideoPreprocessor:
         audio_path=result_audio_path,
         transcript=transcript,
         transcript_available=transcript_available,
+        full_video_frame_evidence=full_video_frame_evidence,
+        first_5_seconds_frame_evidence=first_5_seconds_frame_evidence,
+        full_video_transcript=transcript,
+        first_5_seconds_audio_path=result_first_5s_audio_path,
+        first_5_seconds_transcript=first_5_seconds_transcript,
+        first_5_seconds_transcript_available=(
+            first_5_seconds_transcript_available
+        ),
     )
 
   def _ensure_local(self, source: models.VideoSource) -> models.VideoSource:
@@ -139,20 +176,61 @@ class VideoPreprocessor:
     ])
     return float(completed.stdout.strip())
 
-  def _extract_frames(self, video_path: str, output_dir: Path) -> None:
-    self._run([
-        "ffmpeg",
-        "-y",
-        "-i",
-        video_path,
-        "-vf",
-        f"fps={self.frame_sample_rate}",
-        "-frames:v",
-        str(self.max_frames),
-        str(output_dir / "frame_%04d.jpg"),
-    ])
+  def _full_video_timestamps(self, duration_seconds: float) -> list[float]:
+    """Return evenly spaced frame timestamps across the full video."""
+    if duration_seconds <= 0 or self.max_frames <= 1:
+      return [0.0]
+    step = duration_seconds / (self.max_frames - 1)
+    return [round(step * index, 2) for index in range(self.max_frames)]
 
-  def _extract_first_5s_frames(self, video_path: str, output_dir: Path) -> None:
+  def _first_5s_timestamps(self, duration_seconds: float) -> list[float]:
+    """Return sampled frame timestamps within the first five seconds."""
+    if duration_seconds <= 0 or self.max_frames <= 1:
+      return [0.0]
+    end_seconds = min(duration_seconds, 5.0)
+    if self.frame_sample_rate <= 0:
+      return [0.0, round(end_seconds, 2)][:self.max_frames]
+
+    step = 1 / self.frame_sample_rate
+    timestamps = []
+    timestamp = 0.0
+    while timestamp < end_seconds:
+      timestamps.append(round(timestamp, 2))
+      timestamp += step
+    if not timestamps or timestamps[-1] != round(end_seconds, 2):
+      timestamps.append(round(end_seconds, 2))
+    if len(timestamps) <= self.max_frames:
+      return timestamps
+    return timestamps[: self.max_frames - 1] + [round(end_seconds, 2)]
+
+  def _extract_frames_at_timestamps(
+      self,
+      video_path: str,
+      output_dir: Path,
+      timestamps: list[float],
+  ) -> list[models.VideoFrameEvidence]:
+    evidence = []
+    for index, timestamp in enumerate(timestamps, start=1):
+      output_path = output_dir / f"frame_{index:04d}.jpg"
+      self._run([
+          "ffmpeg",
+          "-y",
+          "-ss",
+          f"{timestamp:.2f}",
+          "-i",
+          video_path,
+          "-frames:v",
+          "1",
+          str(output_path),
+      ])
+      if output_path.exists():
+        evidence.append(models.VideoFrameEvidence(
+            path=str(output_path),
+            timestamp_seconds=timestamp,
+        ))
+    return evidence
+
+  def _extract_first_5s_audio(self, video_path: str, audio_path: Path) -> None:
     self._run([
         "ffmpeg",
         "-y",
@@ -160,11 +238,17 @@ class VideoPreprocessor:
         "5",
         "-i",
         video_path,
-        "-vf",
-        f"fps={self.frame_sample_rate}",
-        "-frames:v",
-        str(self.max_frames),
-        str(output_dir / "frame_%04d.jpg"),
+        "-map",
+        "0:a:0",
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        "-codec:a",
+        "libmp3lame",
+        "-b:a",
+        "64k",
+        str(audio_path),
     ])
 
   def _extract_audio(self, video_path: str, audio_path: Path) -> None:
