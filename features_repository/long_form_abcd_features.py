@@ -690,6 +690,43 @@ def get_long_form_abcd_feature_configs() -> list[VideoFeature]:
           include_in_evaluation=True,
           group_by=VideoSegment.FULL_VIDEO,
       ),
+      VideoFeature(
+          id="e_long_form_max_10_words_per_frame",
+          name="Max 10 Words Per Frame",
+          category=VideoFeatureCategory.LONG_FORM_ABCD,
+          sub_category=VideoFeatureSubCategory.NONE,
+          video_segment=VideoSegment.FULL_VIDEO,
+          evaluation_criteria="""
+                Every frame with visible on-screen text contains no more than 10 words.
+                Frames without visible text pass this criterion.
+            """,
+          prompt_template="""
+                Does every frame with visible on-screen text contain 10 words or fewer?
+            """,
+          extra_instructions=[
+              "Consider the following criteria for your answer: {criteria}",
+              (
+                  "Look through each frame in the video carefully and count"
+                  " visible on-screen words per frame."
+              ),
+              (
+                  "Treat readable brand names, subtitles, captions, supers,"
+                  " disclaimers, and product text as visible words."
+              ),
+              (
+                  "Return False if any single frame contains more than 10"
+                  " visible words."
+              ),
+              (
+                  "Provide the timestamp or frame evidence for the highest"
+                  " word count observed."
+              ),
+          ],
+          evaluation_method=EvaluationMethod.LLMS,
+          evaluation_function="",
+          include_in_evaluation=True,
+          group_by=VideoSegment.FULL_VIDEO,
+      ),
   ]
 
   return feature_configs

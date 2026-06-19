@@ -475,6 +475,42 @@ def get_shorts_feature_configs() -> list[VideoFeature]:
           group_by=VideoSegment.FULL_VIDEO,
       ),
       VideoFeature(
+          id="e_shorts_brand_mention_speech_1st_5_secs",
+          name="Brand Mention (Speech) (First 5 seconds)",
+          category=VideoFeatureCategory.SHORTS,
+          sub_category=VideoFeatureSubCategory.BRAND,
+          video_segment=VideoSegment.FIRST_5_SECS_VIDEO,
+          evaluation_criteria="""
+            The brand name is heard in the audio or speech in the first 5 seconds of the video.
+            """,
+          prompt_template="""
+            Does the speech mention the brand {brand_name} in the first 5 seconds of the video?
+            """,
+          extra_instructions=[
+              "Consider the following criteria for your answer: {criteria}",
+              (
+                  "Only evaluate audio or speech from the first 5 seconds of"
+                  " the video."
+              ),
+              (
+                  "Count clear mentions of the brand name or any configured"
+                  " brand variation."
+              ),
+              (
+                  "Provide the exact timestamp when the brand {brand_name} is"
+                  " heard in speech."
+              ),
+              (
+                  "Return True if and only if the brand {brand_name} or a"
+                  " configured brand variation is heard in the first 5 seconds."
+              ),
+          ],
+          evaluation_method=EvaluationMethod.LLMS,
+          evaluation_function="",
+          include_in_evaluation=True,
+          group_by=VideoSegment.FIRST_5_SECS_VIDEO,
+      ),
+      VideoFeature(
           id="shorts_product_context_index",
           name="Product Context & Usage Quality",
           category=VideoFeatureCategory.SHORTS,
@@ -847,6 +883,43 @@ def get_shorts_feature_configs() -> list[VideoFeature]:
                 }}
             }}""",
           extra_instructions=[],
+          evaluation_method=EvaluationMethod.LLMS,
+          evaluation_function="",
+          include_in_evaluation=True,
+          group_by=VideoSegment.FULL_VIDEO,
+      ),
+      VideoFeature(
+          id="e_shorts_max_10_words_per_frame",
+          name="Max 10 Words Per Frame",
+          category=VideoFeatureCategory.SHORTS,
+          sub_category=VideoFeatureSubCategory.NONE,
+          video_segment=VideoSegment.FULL_VIDEO,
+          evaluation_criteria="""
+            Every frame with visible on-screen text contains no more than 10 words.
+            Frames without visible text pass this criterion.
+            """,
+          prompt_template="""
+            Does every frame with visible on-screen text contain 10 words or fewer?
+            """,
+          extra_instructions=[
+              "Consider the following criteria for your answer: {criteria}",
+              (
+                  "Look through each frame in the video carefully and count"
+                  " visible on-screen words per frame."
+              ),
+              (
+                  "Treat readable brand names, subtitles, captions, supers,"
+                  " stickers, disclaimers, and product text as visible words."
+              ),
+              (
+                  "Return False if any single frame contains more than 10"
+                  " visible words."
+              ),
+              (
+                  "Provide the timestamp or frame evidence for the highest"
+                  " word count observed."
+              ),
+          ],
           evaluation_method=EvaluationMethod.LLMS,
           evaluation_function="",
           include_in_evaluation=True,
