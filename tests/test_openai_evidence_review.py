@@ -32,6 +32,31 @@ def test_helper_imports_by_file_path():
   assert helper.VIDEO_EXTENSIONS == {".mp4", ".mov", ".m4v"}
 
 
+def test_openai_evidence_review_notebook_references_helper_workflow():
+  """Notebook documents the approved evidence review helper workflow."""
+  notebook_path = (
+      Path(__file__).resolve().parents[1]
+      / "notebooks"
+      / "20260619_openai_evidence_review"
+      / "openai_evidence_review.ipynb"
+  )
+
+  notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
+  source = "\n".join(
+      "".join(cell.get("source", ""))
+      for cell in notebook.get("cells", [])
+  )
+
+  assert notebook["nbformat"] == 4
+  assert notebook["nbformat_minor"] == 5
+  assert "discover_sample_videos" in source
+  assert "build_validation_command" in source
+  assert "render_evidence_figure" in source
+  assert "outputs/openai_validation_sample" in source
+  assert "load_feature_rows" in source
+  assert "transcript_snippet" in source
+
+
 def test_render_font_fallbacks_follow_design_order():
   """Figure rendering keeps DESIGN.md Figma fonts before generic fallbacks."""
   helper = _load_evidence_review()
