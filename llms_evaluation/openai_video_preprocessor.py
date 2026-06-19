@@ -1,6 +1,7 @@
 """Local video preprocessing for OpenAI evaluation."""
 
 import hashlib
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -9,11 +10,29 @@ import models
 
 
 _SUBPROCESS_TIMEOUT_SECONDS = 300
+_MANIFEST_SCHEMA_VERSION = 1
+_EXTRACTION_STRATEGY_VERSION = "openai-evidence-v1"
+_MANIFEST_FILENAME = "preprocess_manifest.json"
 
 
 def build_cache_key(uri: str) -> str:
   """Build a stable short cache key from an input URI."""
   return hashlib.sha256(uri.encode("utf-8")).hexdigest()[:16]
+
+
+def _manifest_path(video_dir: Path) -> Path:
+  return video_dir / _MANIFEST_FILENAME
+
+
+def _source_fingerprint(source: models.VideoSource) -> dict:
+  source_stat = Path(source.local_path).stat()
+  return {
+      "original_uri": source.original_uri,
+      "local_path": source.local_path,
+      "source_type": source.source_type,
+      "size": source_stat.st_size,
+      "mtime_ns": source_stat.st_mtime_ns,
+  }
 
 
 class VideoPreprocessor:
@@ -39,10 +58,18 @@ class VideoPreprocessor:
     """Preprocess a video source for OpenAI evaluation."""
     local_source = self._ensure_local(source)
     video_dir = self.cache_dir / build_cache_key(local_source.original_uri)
+    manifest_path = _manifest_path(video_dir)
+    if not self.refresh_cache:
+      cached_result = self._load_manifest_result(manifest_path, local_source)
+      if cached_result is not None:
+        return cached_result
+
     full_frames_dir = video_dir / "frames" / "full"
     first_frames_dir = video_dir / "frames" / "first_5s"
     audio_path = video_dir / "audio.mp3"
     first_5s_audio_path = video_dir / "audio_first_5s.mp3"
+    transcript_path = video_dir / "transcript.txt"
+    first_5s_transcript_path = video_dir / "transcript_first_5s.txt"
     full_frames_dir.mkdir(parents=True, exist_ok=True)
     first_frames_dir.mkdir(parents=True, exist_ok=True)
     audio_path.parent.mkdir(parents=True, exist_ok=True)
@@ -119,7 +146,12 @@ class VideoPreprocessor:
         first_5_seconds_transcript_available = False
         result_first_5s_audio_path = None
 
-    return models.VideoPreprocessResult(
+    transcript_path.write_text(transcript, encoding="utf-8")
+    first_5s_transcript_path.write_text(
+        first_5_seconds_transcript, encoding="utf-8"
+    )
+
+    result = models.VideoPreprocessResult(
         source=local_source,
         duration_seconds=duration_seconds,
         full_video_frames=full_video_frames,
@@ -135,15 +167,35 @@ class VideoPreprocessor:
         first_5_seconds_transcript_available=(
             first_5_seconds_transcript_available
         ),
+        preprocess_manifest_path=str(manifest_path),
     )
+    self._write_manifest(
+        manifest_path,
+        result,
+        transcript_path,
+        first_5s_transcript_path,
+    )
+    return result
 
   def _ensure_local(self, source: models.VideoSource) -> models.VideoSource:
     if source.source_type == models.CreativeProviderType.YOUTUBE.value:
       video_dir = self.cache_dir / build_cache_key(source.original_uri)
       video_dir.mkdir(parents=True, exist_ok=True)
-      for stale_source in video_dir.glob("source.*"):
-        if stale_source.is_file():
-          stale_source.unlink()
+      cached_sources = sorted(video_dir.glob("source.*"))
+      if not self.refresh_cache and cached_sources:
+        if len(cached_sources) != 1:
+          raise RuntimeError(
+              f"Expected one downloaded video, found {len(cached_sources)}"
+          )
+        return models.VideoSource(
+            original_uri=source.original_uri,
+            local_path=str(cached_sources[0]),
+            source_type=source.source_type,
+        )
+      if self.refresh_cache:
+        for stale_source in cached_sources:
+          if stale_source.is_file():
+            stale_source.unlink()
       output_template = str(video_dir / "source.%(ext)s")
       self._run([
           "yt-dlp",
@@ -167,6 +219,162 @@ class VideoPreprocessor:
     if not os.path.exists(source.local_path):
       raise FileNotFoundError(f"Video file not found: {source.local_path}")
     return source
+
+  def _settings_fingerprint(self) -> dict:
+    return {
+        "max_frames": self.max_frames,
+        "frame_sample_rate": self.frame_sample_rate,
+        "transcription_model": self.transcription_model,
+    }
+
+  def _load_manifest_result(
+      self,
+      manifest_path: Path,
+      source: models.VideoSource,
+  ) -> models.VideoPreprocessResult | None:
+    if not manifest_path.exists():
+      return None
+    try:
+      manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+      source_fingerprint = _source_fingerprint(source)
+    except (OSError, json.JSONDecodeError):
+      return None
+    if not isinstance(manifest, dict):
+      return None
+    if manifest.get("schema_version") != _MANIFEST_SCHEMA_VERSION:
+      return None
+    if manifest.get("strategy_version") != _EXTRACTION_STRATEGY_VERSION:
+      return None
+    if manifest.get("source") != source_fingerprint:
+      return None
+    if manifest.get("settings") != self._settings_fingerprint():
+      return None
+
+    full_video_frame_evidence = self._manifest_frame_evidence(
+        manifest.get("full_video_frame_evidence")
+    )
+    first_5_seconds_frame_evidence = self._manifest_frame_evidence(
+        manifest.get("first_5_seconds_frame_evidence")
+    )
+    if not full_video_frame_evidence or not first_5_seconds_frame_evidence:
+      return None
+
+    audio_path = manifest.get("audio_path")
+    first_5_seconds_audio_path = manifest.get("first_5_seconds_audio_path")
+    if not self._manifest_optional_artifact_exists(audio_path):
+      return None
+    if not self._manifest_optional_artifact_exists(first_5_seconds_audio_path):
+      return None
+
+    transcript_path = manifest.get("transcript_path")
+    first_5_seconds_transcript_path = manifest.get(
+        "first_5_seconds_transcript_path"
+    )
+    if not isinstance(transcript_path, str):
+      return None
+    if not isinstance(first_5_seconds_transcript_path, str):
+      return None
+    try:
+      duration_seconds = float(manifest.get("duration_seconds"))
+      transcript = Path(transcript_path).read_text(encoding="utf-8")
+      first_5_seconds_transcript = Path(
+          first_5_seconds_transcript_path
+      ).read_text(encoding="utf-8")
+    except (OSError, TypeError, ValueError):
+      return None
+
+    return models.VideoPreprocessResult(
+        source=source,
+        duration_seconds=duration_seconds,
+        full_video_frames=[
+            frame.path for frame in full_video_frame_evidence
+        ],
+        first_5_seconds_frames=[
+            frame.path for frame in first_5_seconds_frame_evidence
+        ],
+        audio_path=audio_path,
+        transcript=transcript,
+        transcript_available=bool(manifest.get("transcript_available")),
+        full_video_frame_evidence=full_video_frame_evidence,
+        first_5_seconds_frame_evidence=first_5_seconds_frame_evidence,
+        full_video_transcript=transcript,
+        first_5_seconds_audio_path=first_5_seconds_audio_path,
+        first_5_seconds_transcript=first_5_seconds_transcript,
+        first_5_seconds_transcript_available=bool(
+            manifest.get("first_5_seconds_transcript_available")
+        ),
+        preprocess_manifest_path=str(manifest_path),
+    )
+
+  def _write_manifest(
+      self,
+      manifest_path: Path,
+      result: models.VideoPreprocessResult,
+      transcript_path: Path,
+      first_transcript_path: Path,
+  ) -> None:
+    manifest = {
+        "schema_version": _MANIFEST_SCHEMA_VERSION,
+        "strategy_version": _EXTRACTION_STRATEGY_VERSION,
+        "source": _source_fingerprint(result.source),
+        "settings": self._settings_fingerprint(),
+        "duration_seconds": result.duration_seconds,
+        "full_video_frame_evidence": [
+            {
+                "path": frame.path,
+                "timestamp_seconds": frame.timestamp_seconds,
+            }
+            for frame in result.full_video_frame_evidence
+        ],
+        "first_5_seconds_frame_evidence": [
+            {
+                "path": frame.path,
+                "timestamp_seconds": frame.timestamp_seconds,
+            }
+            for frame in result.first_5_seconds_frame_evidence
+        ],
+        "audio_path": result.audio_path,
+        "first_5_seconds_audio_path": result.first_5_seconds_audio_path,
+        "transcript_path": str(transcript_path),
+        "first_5_seconds_transcript_path": str(first_transcript_path),
+        "transcript_available": result.transcript_available,
+        "first_5_seconds_transcript_available": (
+            result.first_5_seconds_transcript_available
+        ),
+    }
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+  def _manifest_frame_evidence(
+      self,
+      manifest_evidence,
+  ) -> list[models.VideoFrameEvidence] | None:
+    if not isinstance(manifest_evidence, list):
+      return None
+    evidence = []
+    for frame in manifest_evidence:
+      if not isinstance(frame, dict):
+        return None
+      if set(frame) != {"path", "timestamp_seconds"}:
+        return None
+      path = frame["path"]
+      if not isinstance(path, str) or not Path(path).is_file():
+        return None
+      try:
+        timestamp_seconds = float(frame["timestamp_seconds"])
+      except (TypeError, ValueError):
+        return None
+      evidence.append(models.VideoFrameEvidence(
+          path=path,
+          timestamp_seconds=timestamp_seconds,
+      ))
+    return evidence
+
+  def _manifest_optional_artifact_exists(self, artifact_path) -> bool:
+    if artifact_path is None:
+      return True
+    if not isinstance(artifact_path, str) or not artifact_path:
+      return False
+    return Path(artifact_path).is_file()
 
   def _probe_duration(self, video_path: str) -> float:
     completed = self._run([

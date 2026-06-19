@@ -1,6 +1,7 @@
 """Tests for OpenAI video preprocessing."""
 
 import hashlib
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -18,6 +19,85 @@ def _write_exact_frame_output(cmd):
   output_path = Path(cmd[-1])
   assert "%" not in output_path.name
   output_path.write_bytes(b"frame")
+
+
+def _write_manifest(
+    cache_dir,
+    source,
+    max_frames,
+    frame_sample_rate,
+    transcription_model="gpt-4o-transcribe",
+    duration_seconds=12.5,
+    transcript="cached full transcript",
+    first_5_seconds_transcript="cached first transcript",
+):
+  video_cache_dir = cache_dir / build_cache_key(source.original_uri)
+  full_frame_path = video_cache_dir / "frames" / "full" / "frame_0001.jpg"
+  first_frame_path = (
+      video_cache_dir / "frames" / "first_5s" / "frame_0001.jpg"
+  )
+  audio_path = video_cache_dir / "audio.mp3"
+  first_audio_path = video_cache_dir / "audio_first_5s.mp3"
+  transcript_path = video_cache_dir / "transcript.txt"
+  first_transcript_path = video_cache_dir / "transcript_first_5s.txt"
+  for artifact_path in (
+      full_frame_path,
+      first_frame_path,
+      audio_path,
+      first_audio_path,
+      transcript_path,
+      first_transcript_path,
+  ):
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+  full_frame_path.write_bytes(b"cached full frame")
+  first_frame_path.write_bytes(b"cached first frame")
+  audio_path.write_bytes(b"cached audio")
+  first_audio_path.write_bytes(b"cached first audio")
+  transcript_path.write_text(transcript, encoding="utf-8")
+  first_transcript_path.write_text(
+      first_5_seconds_transcript, encoding="utf-8"
+  )
+  source_path = Path(source.local_path)
+  manifest = {
+      "schema_version": 1,
+      "strategy_version": "openai-evidence-v1",
+      "source": {
+          "original_uri": source.original_uri,
+          "local_path": source.local_path,
+          "source_type": source.source_type,
+          "size": source_path.stat().st_size,
+          "mtime_ns": source_path.stat().st_mtime_ns,
+      },
+      "settings": {
+          "max_frames": max_frames,
+          "frame_sample_rate": frame_sample_rate,
+          "transcription_model": transcription_model,
+      },
+      "duration_seconds": duration_seconds,
+      "full_video_frame_evidence": [
+          {
+              "path": str(full_frame_path),
+              "timestamp_seconds": 0.0,
+          }
+      ],
+      "first_5_seconds_frame_evidence": [
+          {
+              "path": str(first_frame_path),
+              "timestamp_seconds": 0.0,
+          }
+      ],
+      "audio_path": str(audio_path),
+      "first_5_seconds_audio_path": str(first_audio_path),
+      "transcript_path": str(transcript_path),
+      "first_5_seconds_transcript_path": str(first_transcript_path),
+      "transcript_available": bool(transcript),
+      "first_5_seconds_transcript_available": bool(
+          first_5_seconds_transcript
+      ),
+  }
+  manifest_path = video_cache_dir / "preprocess_manifest.json"
+  manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+  return manifest_path
 
 
 def test_build_cache_key_returns_stable_sha256_prefix():
@@ -173,6 +253,238 @@ def test_local_source_requires_existing_path(tmp_path):
 
   with pytest.raises(FileNotFoundError, match="Video file not found"):
     preprocessor.preprocess(source)
+
+
+def test_preprocessing_reuses_valid_manifest_cache(tmp_path, monkeypatch):
+  """Valid manifest cache avoids subprocess and transcription work."""
+  video_path = tmp_path / "video.mp4"
+  video_path.write_bytes(b"video")
+  cache_dir = tmp_path / "cache"
+  source = models.VideoSource(
+      original_uri=str(video_path),
+      local_path=str(video_path),
+      source_type=models.CreativeProviderType.LOCAL.value,
+  )
+  manifest_path = _write_manifest(
+      cache_dir,
+      source,
+      max_frames=4,
+      frame_sample_rate=0.5,
+      transcript="cached full",
+      first_5_seconds_transcript="cached first",
+  )
+
+  class UnexpectedOpenAIService:
+
+    def transcribe_audio(self, audio_path, model_name="gpt-4o-transcribe"):
+      raise AssertionError("transcription should not run on cache hit")
+
+  def fake_run(cmd, check, capture_output, text, timeout):
+    raise AssertionError(f"subprocess should not run on cache hit: {cmd}")
+
+  monkeypatch.setattr(preprocessor_module.subprocess, "run", fake_run)
+
+  result = VideoPreprocessor(
+      cache_dir=str(cache_dir),
+      max_frames=4,
+      frame_sample_rate=0.5,
+      openai_service=UnexpectedOpenAIService(),
+  ).preprocess(source)
+
+  video_cache_dir = cache_dir / build_cache_key(str(video_path))
+  assert result.source == source
+  assert result.duration_seconds == 12.5
+  assert result.full_video_frames == [
+      str(video_cache_dir / "frames" / "full" / "frame_0001.jpg")
+  ]
+  assert result.first_5_seconds_frames == [
+      str(video_cache_dir / "frames" / "first_5s" / "frame_0001.jpg")
+  ]
+  assert result.audio_path == str(video_cache_dir / "audio.mp3")
+  assert result.first_5_seconds_audio_path == str(
+      video_cache_dir / "audio_first_5s.mp3"
+  )
+  assert result.transcript == "cached full"
+  assert result.full_video_transcript == "cached full"
+  assert result.first_5_seconds_transcript == "cached first"
+  assert result.transcript_available is True
+  assert result.first_5_seconds_transcript_available is True
+  assert result.preprocess_manifest_path == str(manifest_path)
+
+
+def test_refresh_cache_rebuilds_valid_manifest_cache(tmp_path, monkeypatch):
+  """Refresh ignores valid manifest cache and writes fresh outputs."""
+  video_path = tmp_path / "video.mp4"
+  video_path.write_bytes(b"video")
+  cache_dir = tmp_path / "cache"
+  source = models.VideoSource(
+      original_uri=str(video_path),
+      local_path=str(video_path),
+      source_type=models.CreativeProviderType.LOCAL.value,
+  )
+  manifest_path = _write_manifest(
+      cache_dir,
+      source,
+      max_frames=1,
+      frame_sample_rate=1.0,
+      transcript="cached full",
+      first_5_seconds_transcript="cached first",
+  )
+  commands = []
+
+  class FakeOpenAIService:
+
+    def transcribe_audio(self, audio_path, model_name="gpt-4o-transcribe"):
+      if audio_path.endswith("audio_first_5s.mp3"):
+        return "fresh first"
+      return "fresh full"
+
+  def fake_run(cmd, check, capture_output, text, timeout):
+    assert check is True
+    assert capture_output is True
+    assert text is True
+    assert timeout == 300
+    commands.append(cmd)
+    if cmd[0] == "ffprobe":
+      return SimpleNamespace(stdout="3.0\n")
+    if cmd[0] == "ffmpeg" and cmd[-1].endswith(".jpg"):
+      _write_exact_frame_output(cmd)
+    if cmd[0] == "ffmpeg" and cmd[-1].endswith(".mp3"):
+      Path(cmd[-1]).write_bytes(b"fresh audio")
+    return SimpleNamespace(stdout="")
+
+  monkeypatch.setattr(preprocessor_module.subprocess, "run", fake_run)
+
+  result = VideoPreprocessor(
+      cache_dir=str(cache_dir),
+      max_frames=1,
+      frame_sample_rate=1.0,
+      openai_service=FakeOpenAIService(),
+      refresh_cache=True,
+  ).preprocess(source)
+
+  assert [cmd[0] for cmd in commands].count("ffprobe") == 1
+  assert result.duration_seconds == 3.0
+  assert result.transcript == "fresh full"
+  assert result.first_5_seconds_transcript == "fresh first"
+  assert result.preprocess_manifest_path == str(manifest_path)
+  assert (cache_dir / build_cache_key(str(video_path)) / "transcript.txt").read_text(
+      encoding="utf-8"
+  ) == "fresh full"
+
+
+def test_manifest_setting_mismatch_rebuilds_cache(tmp_path, monkeypatch):
+  """Changed preprocessing settings invalidate manifest cache."""
+  video_path = tmp_path / "video.mp4"
+  video_path.write_bytes(b"video")
+  cache_dir = tmp_path / "cache"
+  source = models.VideoSource(
+      original_uri=str(video_path),
+      local_path=str(video_path),
+      source_type=models.CreativeProviderType.LOCAL.value,
+  )
+  _write_manifest(
+      cache_dir,
+      source,
+      max_frames=1,
+      frame_sample_rate=1.0,
+      transcript="cached full",
+      first_5_seconds_transcript="cached first",
+  )
+  commands = []
+
+  class FakeOpenAIService:
+
+    def transcribe_audio(self, audio_path, model_name="gpt-4o-transcribe"):
+      if audio_path.endswith("audio_first_5s.mp3"):
+        return "rebuilt first"
+      return "rebuilt full"
+
+  def fake_run(cmd, check, capture_output, text, timeout):
+    assert check is True
+    assert capture_output is True
+    assert text is True
+    assert timeout == 300
+    commands.append(cmd)
+    if cmd[0] == "ffprobe":
+      return SimpleNamespace(stdout="4.0\n")
+    if cmd[0] == "ffmpeg" and cmd[-1].endswith(".jpg"):
+      _write_exact_frame_output(cmd)
+    if cmd[0] == "ffmpeg" and cmd[-1].endswith(".mp3"):
+      Path(cmd[-1]).write_bytes(b"audio")
+    return SimpleNamespace(stdout="")
+
+  monkeypatch.setattr(preprocessor_module.subprocess, "run", fake_run)
+
+  result = VideoPreprocessor(
+      cache_dir=str(cache_dir),
+      max_frames=2,
+      frame_sample_rate=1.0,
+      openai_service=FakeOpenAIService(),
+  ).preprocess(source)
+
+  assert [cmd[0] for cmd in commands].count("ffprobe") == 1
+  assert result.transcript == "rebuilt full"
+  assert len(result.full_video_frame_evidence) == 2
+
+
+def test_missing_manifest_transcript_rebuilds_cache(tmp_path, monkeypatch):
+  """Missing referenced transcript artifact invalidates manifest cache."""
+  video_path = tmp_path / "video.mp4"
+  video_path.write_bytes(b"video")
+  cache_dir = tmp_path / "cache"
+  source = models.VideoSource(
+      original_uri=str(video_path),
+      local_path=str(video_path),
+      source_type=models.CreativeProviderType.LOCAL.value,
+  )
+  manifest_path = _write_manifest(
+      cache_dir,
+      source,
+      max_frames=1,
+      frame_sample_rate=1.0,
+      transcript="cached full",
+      first_5_seconds_transcript="cached first",
+  )
+  manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+  Path(manifest["transcript_path"]).unlink()
+  commands = []
+
+  class FakeOpenAIService:
+
+    def transcribe_audio(self, audio_path, model_name="gpt-4o-transcribe"):
+      if audio_path.endswith("audio_first_5s.mp3"):
+        return "rebuilt first"
+      return "rebuilt full"
+
+  def fake_run(cmd, check, capture_output, text, timeout):
+    assert check is True
+    assert capture_output is True
+    assert text is True
+    assert timeout == 300
+    commands.append(cmd)
+    if cmd[0] == "ffprobe":
+      return SimpleNamespace(stdout="3.0\n")
+    if cmd[0] == "ffmpeg" and cmd[-1].endswith(".jpg"):
+      _write_exact_frame_output(cmd)
+    if cmd[0] == "ffmpeg" and cmd[-1].endswith(".mp3"):
+      Path(cmd[-1]).write_bytes(b"fresh audio")
+    return SimpleNamespace(stdout="")
+
+  monkeypatch.setattr(preprocessor_module.subprocess, "run", fake_run)
+
+  result = VideoPreprocessor(
+      cache_dir=str(cache_dir),
+      max_frames=1,
+      frame_sample_rate=1.0,
+      openai_service=FakeOpenAIService(),
+  ).preprocess(source)
+
+  assert [cmd[0] for cmd in commands].count("ffprobe") == 1
+  assert result.transcript == "rebuilt full"
+  assert Path(manifest["transcript_path"]).read_text(
+      encoding="utf-8"
+  ) == "rebuilt full"
 
 
 def test_local_preprocessing_extracts_first_5s_audio_and_transcript(
@@ -434,10 +746,69 @@ def test_youtube_preprocessing_downloads_before_extracting(tmp_path, monkeypatch
   assert result.transcript == "downloaded transcript"
 
 
+def test_youtube_preprocessing_reuses_cached_source_without_refresh(
+    tmp_path, monkeypatch
+):
+  """YouTube preprocessing reuses an existing cached source when not refreshing."""
+  cache_dir = tmp_path / "cache"
+  youtube_uri = "https://www.youtube.com/watch?v=cached"
+  video_cache_dir = cache_dir / build_cache_key(youtube_uri)
+  video_cache_dir.mkdir(parents=True)
+  cached_source_path = video_cache_dir / "source.mp4"
+  cached_source_path.write_bytes(b"cached source")
+  source = models.VideoSource(
+      original_uri=youtube_uri,
+      local_path="",
+      source_type=models.CreativeProviderType.YOUTUBE.value,
+  )
+  commands = []
+
+  class FakeOpenAIService:
+
+    def transcribe_audio(self, audio_path, model_name="gpt-4o-transcribe"):
+      assert model_name == "gpt-4o-transcribe"
+      return "cached source transcript"
+
+  def fake_run(cmd, check, capture_output, text, timeout):
+    assert check is True
+    assert capture_output is True
+    assert text is True
+    assert timeout == 300
+    commands.append(cmd)
+    assert cmd[0] != "yt-dlp"
+    if cmd[0] == "ffprobe":
+      assert cmd[-1] == str(cached_source_path)
+      return SimpleNamespace(stdout="8.0\n")
+    if cmd[0] == "ffmpeg" and cmd[-1].endswith(".jpg"):
+      _write_exact_frame_output(cmd)
+    if cmd[0] == "ffmpeg" and cmd[-1].endswith(".mp3"):
+      Path(cmd[-1]).write_bytes(b"audio")
+    return SimpleNamespace(stdout="")
+
+  monkeypatch.setattr(preprocessor_module.subprocess, "run", fake_run)
+
+  result = VideoPreprocessor(
+      cache_dir=str(cache_dir),
+      max_frames=1,
+      frame_sample_rate=1.0,
+      openai_service=FakeOpenAIService(),
+  ).preprocess(source)
+
+  assert [cmd[0] for cmd in commands] == [
+      "ffprobe",
+      "ffmpeg",
+      "ffmpeg",
+      "ffmpeg",
+      "ffmpeg",
+  ]
+  assert result.source.local_path == str(cached_source_path)
+  assert result.transcript == "cached source transcript"
+
+
 def test_youtube_preprocessing_ignores_stale_hash_scoped_sources(
     tmp_path, monkeypatch
 ):
-  """Stale source files in the video cache are removed before download."""
+  """Refresh removes stale source files in the video cache before download."""
   cache_dir = tmp_path / "cache"
   youtube_uri = "https://www.youtube.com/watch?v=stale"
   video_cache_dir = cache_dir / build_cache_key(youtube_uri)
@@ -482,6 +853,7 @@ def test_youtube_preprocessing_ignores_stale_hash_scoped_sources(
       max_frames=1,
       frame_sample_rate=1.0,
       openai_service=FakeOpenAIService(),
+      refresh_cache=True,
   ).preprocess(source)
 
   assert result.source.local_path == str(video_cache_dir / "source.mp4")

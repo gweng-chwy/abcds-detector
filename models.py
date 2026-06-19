@@ -91,6 +91,7 @@ class VideoPreprocessResult:
   first_5_seconds_audio_path: str | None = None
   first_5_seconds_transcript: str = ""
   first_5_seconds_transcript_available: bool = False
+  preprocess_manifest_path: str | None = None
 
 
 @dataclass
