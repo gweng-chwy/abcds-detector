@@ -79,6 +79,16 @@ def test_discover_sample_videos_groups_platform_dirs_deterministically(tmp_path)
   )
 
 
+def test_discover_sample_videos_returns_empty_for_missing_or_file_path(tmp_path):
+  """Video discovery tolerates absent optional local sample inputs."""
+  helper = _load_evidence_review()
+  file_path = tmp_path / "not-a-directory.mp4"
+  file_path.write_text("video", encoding="utf-8")
+
+  assert helper.discover_sample_videos(tmp_path / "missing") == {}
+  assert helper.discover_sample_videos(file_path) == {}
+
+
 def test_build_validation_command_uses_openai_local_flags_and_unknown_metadata(
     tmp_path,
 ):
@@ -137,6 +147,17 @@ def test_transcript_snippet_falls_back_to_text_or_placeholder():
       "Plain transcript."
   )
   assert helper.transcript_snippet({}, 3.0) == "No transcript available."
+
+
+def test_transcript_snippet_reads_preprocessor_transcript_path(tmp_path):
+  """Transcript snippets support Task 3 preprocessor manifest file paths."""
+  transcript_path = tmp_path / "transcript.txt"
+  transcript_path.write_text(" Full transcript from preprocessor. ", encoding="utf-8")
+  helper = _load_evidence_review()
+
+  assert helper.transcript_snippet({"transcript_path": str(transcript_path)}, 8.0) == (
+      "Full transcript from preprocessor."
+  )
 
 
 def test_load_feature_rows_flattens_assessment_feature_lists(tmp_path):
@@ -216,3 +237,9 @@ def test_render_evidence_figure_writes_non_empty_png(tmp_path):
   assert rendered_path == output_path
   assert output_path.exists()
   assert output_path.stat().st_size > 0
+  with Image.open(output_path) as output_image:
+    assert output_image.size == (2000, 1125)
+
+  import matplotlib.pyplot as plt
+
+  assert plt.get_fignums() == []

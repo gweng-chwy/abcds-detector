@@ -48,6 +48,9 @@ def discover_sample_videos(
 ) -> dict[str, list[Path]]:
   """Return deterministic video samples grouped by first-level directory."""
   sample_root = Path(sample_root)
+  if not sample_root.is_dir():
+    return {}
+
   rng = random.Random(seed)
   grouped_videos = {}
 
@@ -144,6 +147,15 @@ def transcript_snippet(
   if nearby_segments:
     return " ".join(nearby_segments)
 
+  if timestamp_seconds <= 5:
+    first_5_text = _read_text_path(manifest.get("first_5_seconds_transcript_path"))
+    if first_5_text:
+      return first_5_text
+
+  transcript_text = _read_text_path(manifest.get("transcript_path"))
+  if transcript_text:
+    return transcript_text
+
   transcript = str(manifest.get("transcript", "")).strip()
   return transcript or "No transcript available."
 
@@ -209,7 +221,7 @@ def render_evidence_figure(
       "axes.edgecolor": "black",
   })
 
-  fig = Figure(figsize=(13.333, 7.5), dpi=150, facecolor="white")
+  fig = Figure(figsize=(13.333333333333334, 7.5), dpi=150, facecolor="white")
   FigureCanvasAgg(fig)
   grid = fig.add_gridspec(
       2,
@@ -304,6 +316,17 @@ def _first_present(mapping: dict[str, Any], keys: tuple[str, ...]):
     if key in mapping:
       return mapping[key]
   return None
+
+
+def _read_text_path(path_value: str | Path | None) -> str:
+  if not path_value:
+    return ""
+
+  path = Path(path_value)
+  if not path.exists() or not path.is_file():
+    return ""
+
+  return path.read_text(encoding="utf-8").strip()
 
 
 def _configure_text_axis(axis) -> None:
