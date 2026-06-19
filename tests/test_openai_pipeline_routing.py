@@ -274,9 +274,11 @@ def test_execute_openai_assessment_returns_video_assessments(monkeypatch):
         cache_dir,
         max_frames,
         frame_sample_rate,
+        refresh_cache,
         openai_service,
         transcription_model,
     ):
+      assert refresh_cache is config.refresh_cache
       self.calls = []
 
     def preprocess(self, received_source):
@@ -300,7 +302,8 @@ def test_execute_openai_assessment_returns_video_assessments(monkeypatch):
       evaluate_features,
   )
 
-  assessments = main.execute_abcd_assessment_for_videos(_openai_config())
+  config = _openai_config()
+  assessments = main.execute_abcd_assessment_for_videos(config)
 
   assert assessments == [
       models.VideoAssessment(
@@ -334,10 +337,11 @@ def test_execute_openai_assessment_routes_shorts_preprocess_result(monkeypatch):
         cache_dir,
         max_frames,
         frame_sample_rate,
+        refresh_cache,
         openai_service,
         transcription_model,
     ):
-      pass
+      assert refresh_cache is config.refresh_cache
 
     def preprocess(self, received_source):
       assert received_source == source
