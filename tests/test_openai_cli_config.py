@@ -2,6 +2,11 @@
 
 """Tests for OpenAI CLI configuration parsing."""
 
+import sys
+import types
+
+from configuration import Configuration
+import main
 import models
 import utils
 
@@ -185,12 +190,10 @@ def test_video_preprocess_result_tracks_timestamped_evidence():
   full_frame = models.VideoFrameEvidence(
       path="frames/full/frame_0001.jpg",
       timestamp_seconds=0.0,
-      segment=models.VideoSegment.FULL_VIDEO.value,
   )
   first_frame = models.VideoFrameEvidence(
       path="frames/first_5s/frame_0001.jpg",
       timestamp_seconds=0.0,
-      segment=models.VideoSegment.FIRST_5_SECS_VIDEO.value,
   )
 
   result = models.VideoPreprocessResult(
@@ -203,13 +206,31 @@ def test_video_preprocess_result_tracks_timestamped_evidence():
       transcript_available=True,
       full_video_frame_evidence=[full_frame],
       first_5_seconds_frame_evidence=[first_frame],
-      first_5_seconds_audio_path="audio_first_5s.mp3",
       first_5_seconds_transcript="first five transcript",
-      first_5_seconds_transcript_available=True,
-      preprocess_manifest_path=".cache/key/preprocess_manifest.json",
   )
 
   assert result.full_video_frame_evidence == [full_frame]
   assert result.first_5_seconds_frame_evidence == [first_frame]
+  assert result.full_video_transcript == ""
   assert result.first_5_seconds_transcript == "first five transcript"
-  assert result.preprocess_manifest_path == ".cache/key/preprocess_manifest.json"
+  assert not hasattr(result, "first_5_seconds_audio_path")
+  assert not hasattr(result, "first_5_seconds_transcript_available")
+  assert not hasattr(result, "preprocess_manifest_path")
+
+
+def test_openai_preprocessor_builder_passes_refresh_cache(monkeypatch):
+  """OpenAI preprocessor builder wires refresh cache without extra setup."""
+  fake_openai_api_service = types.SimpleNamespace(
+      OpenAIAPIService=lambda: object()
+  )
+  monkeypatch.setitem(
+      sys.modules,
+      "llms_evaluation.openai_api_service",
+      fake_openai_api_service,
+  )
+  config = Configuration()
+  config.refresh_cache = True
+
+  preprocessor = main._build_openai_preprocessor(config)
+
+  assert preprocessor.refresh_cache is True

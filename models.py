@@ -68,7 +68,6 @@ class VideoFrameEvidence:
 
   path: str
   timestamp_seconds: float
-  segment: str
 
 
 @dataclass
@@ -88,10 +87,8 @@ class VideoPreprocessResult:
   first_5_seconds_frame_evidence: list[VideoFrameEvidence] = field(
       default_factory=list
   )
-  first_5_seconds_audio_path: str | None = None
+  full_video_transcript: str = ""
   first_5_seconds_transcript: str = ""
-  first_5_seconds_transcript_available: bool = False
-  preprocess_manifest_path: str | None = None
 
 
 @dataclass

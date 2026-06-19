@@ -25,12 +25,14 @@ class VideoPreprocessor:
       max_frames: int,
       frame_sample_rate: float,
       openai_service: object,
+      refresh_cache: bool = False,
       transcription_model: str = "gpt-4o-transcribe",
   ):
     self.cache_dir = Path(cache_dir)
     self.max_frames = max_frames
     self.frame_sample_rate = frame_sample_rate
     self.openai_service = openai_service
+    self.refresh_cache = refresh_cache
     self.transcription_model = transcription_model
 
   def preprocess(self, source: models.VideoSource) -> models.VideoPreprocessResult:
