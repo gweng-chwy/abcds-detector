@@ -32,6 +32,24 @@ def test_helper_imports_by_file_path():
   assert helper.VIDEO_EXTENSIONS == {".mp4", ".mov", ".m4v"}
 
 
+def test_render_font_fallbacks_follow_design_order():
+  """Figure rendering keeps DESIGN.md Figma fonts before generic fallbacks."""
+  helper = _load_evidence_review()
+
+  assert helper.SANS_FONT_FALLBACKS[:4] == [
+      "figmaSans",
+      "figmaSans Fallback",
+      "Inter",
+      "Geist",
+  ]
+  assert helper.MONO_FONT_FALLBACKS[:4] == [
+      "figmaMono",
+      "figmaMono Fallback",
+      "JetBrains Mono",
+      "Geist Mono",
+  ]
+
+
 def test_discover_sample_videos_groups_platform_dirs_deterministically(tmp_path):
   """Video discovery samples first-level platform directories deterministically."""
   youtube = tmp_path / "youtube"

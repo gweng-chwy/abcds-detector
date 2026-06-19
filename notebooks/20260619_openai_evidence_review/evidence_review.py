@@ -22,6 +22,24 @@ DEFAULT_METADATA = {
     "branded_call_to_actions": "Unknown CTA",
 }
 
+SANS_FONT_FALLBACKS = [
+    "figmaSans",
+    "figmaSans Fallback",
+    "Inter",
+    "Geist",
+    "Arial",
+    "DejaVu Sans",
+]
+
+MONO_FONT_FALLBACKS = [
+    "figmaMono",
+    "figmaMono Fallback",
+    "JetBrains Mono",
+    "Geist Mono",
+    "Menlo",
+    "DejaVu Sans Mono",
+]
+
 
 def discover_sample_videos(
     sample_root: str | Path,
@@ -185,13 +203,8 @@ def render_evidence_figure(
 
   matplotlib.rcParams.update({
       "font.family": "sans-serif",
-      "font.sans-serif": ["Inter", "Geist", "Arial", "DejaVu Sans"],
-      "font.monospace": [
-          "JetBrains Mono",
-          "Geist Mono",
-          "Menlo",
-          "DejaVu Sans Mono",
-      ],
+      "font.sans-serif": SANS_FONT_FALLBACKS,
+      "font.monospace": MONO_FONT_FALLBACKS,
       "text.color": "black",
       "axes.edgecolor": "black",
   })
