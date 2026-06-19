@@ -63,6 +63,15 @@ class VideoSource:
 
 
 @dataclass
+class VideoFrameEvidence:
+  """Timestamped frame evidence used by OpenAI evaluation."""
+
+  path: str
+  timestamp_seconds: float
+  segment: str
+
+
+@dataclass
 class VideoPreprocessResult:
   """Class that represents video preprocessing outputs"""
 
@@ -73,6 +82,16 @@ class VideoPreprocessResult:
   audio_path: str | None
   transcript: str
   transcript_available: bool
+  full_video_frame_evidence: list[VideoFrameEvidence] = field(
+      default_factory=list
+  )
+  first_5_seconds_frame_evidence: list[VideoFrameEvidence] = field(
+      default_factory=list
+  )
+  first_5_seconds_audio_path: str | None = None
+  first_5_seconds_transcript: str = ""
+  first_5_seconds_transcript_available: bool = False
+  preprocess_manifest_path: str | None = None
 
 
 @dataclass

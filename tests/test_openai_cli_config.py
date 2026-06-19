@@ -25,6 +25,7 @@ def test_openai_local_youtube_cli_config():
       "12",
       "--frame_sample_rate",
       "0.5",
+      "--refresh_cache",
   ])
 
   config = utils.build_abcd_params_config(args)
@@ -40,6 +41,7 @@ def test_openai_local_youtube_cli_config():
   assert config.cache_dir == ".cache/custom"
   assert config.max_frames == 12
   assert config.frame_sample_rate == 0.5
+  assert config.refresh_cache is True
   assert config.video_uris == [
       "sample_videos/ad.mp4",
       "https://www.youtube.com/watch?v=abc123",
@@ -63,11 +65,30 @@ def test_default_cli_config_uses_gemini_gcs_and_safe_optional_values():
   assert config.cache_dir == ".cache/abcds-detector"
   assert config.max_frames == 24
   assert config.frame_sample_rate == 1.0
+  assert config.refresh_cache is False
   assert config.llm_params.model_name == "gemini-2.5-pro"
   assert config.llm_params.location == "us-central1"
   assert config.llm_params.generation_config["max_output_tokens"] == 65535
   assert config.llm_params.generation_config["temperature"] == 1
   assert config.llm_params.generation_config["top_p"] == 0.95
+
+
+def test_openai_cli_refresh_cache_flag_defaults_false():
+  """Refresh cache is opt-in so repeated OpenAI runs can reuse artifacts."""
+  args = utils.parse_args([])
+
+  config = utils.build_abcd_params_config(args)
+
+  assert config.refresh_cache is False
+
+
+def test_openai_cli_refresh_cache_flag_sets_config():
+  """Refresh cache can be requested from the CLI."""
+  args = utils.parse_args(["--refresh_cache"])
+
+  config = utils.build_abcd_params_config(args)
+
+  assert config.refresh_cache is True
 
 
 def test_blank_video_uris_are_ignored():
@@ -152,3 +173,43 @@ def test_video_preprocess_result_tracks_source_and_outputs():
   assert result.duration_seconds == 12.5
   assert result.audio_path is None
   assert not result.transcript_available
+
+
+def test_video_preprocess_result_tracks_timestamped_evidence():
+  """Video preprocessing results can carry frame metadata and first-5 transcript."""
+  source = models.VideoSource(
+      original_uri="ad.mp4",
+      local_path="ad.mp4",
+      source_type=models.CreativeProviderType.LOCAL.value,
+  )
+  full_frame = models.VideoFrameEvidence(
+      path="frames/full/frame_0001.jpg",
+      timestamp_seconds=0.0,
+      segment=models.VideoSegment.FULL_VIDEO.value,
+  )
+  first_frame = models.VideoFrameEvidence(
+      path="frames/first_5s/frame_0001.jpg",
+      timestamp_seconds=0.0,
+      segment=models.VideoSegment.FIRST_5_SECS_VIDEO.value,
+  )
+
+  result = models.VideoPreprocessResult(
+      source=source,
+      duration_seconds=12.5,
+      full_video_frames=[full_frame.path],
+      first_5_seconds_frames=[first_frame.path],
+      audio_path="audio.mp3",
+      transcript="full transcript",
+      transcript_available=True,
+      full_video_frame_evidence=[full_frame],
+      first_5_seconds_frame_evidence=[first_frame],
+      first_5_seconds_audio_path="audio_first_5s.mp3",
+      first_5_seconds_transcript="first five transcript",
+      first_5_seconds_transcript_available=True,
+      preprocess_manifest_path=".cache/key/preprocess_manifest.json",
+  )
+
+  assert result.full_video_frame_evidence == [full_frame]
+  assert result.first_5_seconds_frame_evidence == [first_frame]
+  assert result.first_5_seconds_transcript == "first five transcript"
+  assert result.preprocess_manifest_path == ".cache/key/preprocess_manifest.json"

@@ -64,6 +64,7 @@ class Configuration:
     self.cache_dir = ".cache/abcds-detector"
     self.max_frames = 24
     self.frame_sample_rate = 1.0
+    self.refresh_cache = False
 
     # set videos
     self.video_uris: list[str] = []
@@ -109,6 +110,7 @@ class Configuration:
       cache_dir: str | None = None,
       max_frames: int | None = None,
       frame_sample_rate: float | None = None,
+      refresh_cache: bool | None = None,
   ) -> None:
     """Set the required parameters for ABCD to run.
 
@@ -156,6 +158,7 @@ class Configuration:
         if frame_sample_rate is not None
         else self.frame_sample_rate
     )
+    self.refresh_cache = bool(refresh_cache)
 
     self.creative_provider_types = self._parse_creative_provider_types(
         creative_provider_type

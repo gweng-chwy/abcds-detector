@@ -60,6 +60,7 @@ def build_abcd_params_config(args: any) -> Configuration:
       cache_dir=getattr(args, "cache_dir", None),
       max_frames=getattr(args, "max_frames", None),
       frame_sample_rate=getattr(args, "frame_sample_rate", None),
+      refresh_cache=getattr(args, "refresh_cache", None),
   )
   config.set_videos(args.video_uris)
   config.set_brand_details(
@@ -235,6 +236,12 @@ def parse_args(arg_list: list[str] | None = None) -> argparse.Namespace:
       help="Frame sample rate for OpenAI video preprocessing",
       type=float,
       default=1.0,
+  )
+  parser.add_argument(
+      "--refresh_cache",
+      help="Rebuild OpenAI local preprocessing cache for this run",
+      action="store_true",
+      default=False,
   )
   parser.add_argument(
       "--features_to_evaluate",
