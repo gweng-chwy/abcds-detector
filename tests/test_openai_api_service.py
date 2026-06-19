@@ -69,7 +69,9 @@ def test_build_input_includes_text_and_image_data_url(tmp_path):
           system_instructions="System instructions",
       ),
       transcript="spoken words",
+      transcript_available=True,
       frame_paths=[str(frame_path)],
+      frame_evidence=[models.VideoFrameEvidence(str(frame_path), 3.25)],
       duration_seconds=15.0,
   )
 
@@ -83,14 +85,41 @@ def test_build_input_includes_text_and_image_data_url(tmp_path):
   }
   assert payload[1]["role"] == "user"
   assert payload[1]["content"][0]["type"] == "input_text"
-  assert "Video duration seconds: 15.0" in payload[1]["content"][0]["text"]
-  assert "Transcript:\nspoken words" in payload[1]["content"][0]["text"]
-  assert "Question?" in payload[1]["content"][0]["text"]
+  text = payload[1]["content"][0]["text"]
+  assert "Video duration seconds: 15.0" in text
+  assert "Transcript available: True" in text
+  assert "Transcript:\nspoken words" in text
+  assert "Frame evidence:" in text
+  assert f"{frame_path.name} at 3.25s" in text
+  assert "Question?" in text
   assert payload[1]["content"][1] == {
       "type": "input_image",
       "image_url": expected_data_url,
       "detail": "auto",
   }
+
+
+def test_build_input_uses_placeholder_when_transcript_unavailable(tmp_path):
+  """Unavailable transcripts are labeled and use the no-transcript body."""
+  frame_path = tmp_path / "frame.jpg"
+  frame_path.write_bytes(b"image")
+  service = OpenAIAPIService(client=mock.Mock())
+
+  payload = service.build_input(
+      prompt_config=models.PromptConfig(
+          prompt="Question?",
+          system_instructions="System instructions",
+      ),
+      transcript="ignored transcript",
+      transcript_available=False,
+      frame_paths=[str(frame_path)],
+      frame_evidence=[models.VideoFrameEvidence(str(frame_path), 3.25)],
+      duration_seconds=15.0,
+  )
+
+  text = payload[1]["content"][0]["text"]
+  assert "Transcript available: False" in text
+  assert "Transcript:\n[no transcript available]" in text
 
 
 def test_evaluate_features_passes_model_schema_and_parses_json(tmp_path):
@@ -122,6 +151,9 @@ def test_evaluate_features_passes_model_schema_and_parses_json(tmp_path):
       model_name="gpt-test",
       schema=schema,
       frame_paths=[str(frame_path)],
+      transcript="selected transcript",
+      transcript_available=True,
+      frame_evidence=[models.VideoFrameEvidence(str(frame_path), 3.25)],
   )
 
   assert result == {"features": [{"id": "feature-1"}]}
@@ -139,6 +171,9 @@ def test_evaluate_features_passes_model_schema_and_parses_json(tmp_path):
       },
   }
   assert create_call.kwargs["input"][0]["role"] == "system"
+  assert "Transcript:\nselected transcript" in (
+      create_call.kwargs["input"][1]["content"][0]["text"]
+  )
 
 
 def test_evaluate_features_adapts_nested_schema_for_openai_strict_outputs():
@@ -184,6 +219,9 @@ def test_evaluate_features_adapts_nested_schema_for_openai_strict_outputs():
       model_name="gpt-test",
       schema=schema,
       frame_paths=[],
+      transcript="selected transcript",
+      transcript_available=True,
+      frame_evidence=[],
   )
 
   strict_schema = client.responses.create.call_args.kwargs["text"]["format"][
@@ -227,6 +265,9 @@ def test_openai_video_response_schema_is_adapted_for_strict_outputs(tmp_path):
       model_name="gpt-test",
       schema=models.OPENAI_VIDEO_RESPONSE_SCHEMA,
       frame_paths=[str(frame_path)],
+      transcript="selected transcript",
+      transcript_available=True,
+      frame_evidence=[models.VideoFrameEvidence(str(frame_path), 3.25)],
   )
 
   strict_schema = client.responses.create.call_args.kwargs["text"]["format"][
@@ -257,7 +298,12 @@ def test_build_input_rejects_too_many_frames(tmp_path):
             system_instructions="System instructions",
         ),
         transcript="spoken words",
+        transcript_available=True,
         frame_paths=frame_paths,
+        frame_evidence=[
+            models.VideoFrameEvidence(frame_path, 0.0)
+            for frame_path in frame_paths
+        ],
         duration_seconds=15.0,
     )
 
@@ -280,7 +326,9 @@ def test_build_input_rejects_total_image_bytes_over_cap(tmp_path, monkeypatch):
             system_instructions="System instructions",
         ),
         transcript="spoken words",
+        transcript_available=True,
         frame_paths=[str(frame_path)],
+        frame_evidence=[models.VideoFrameEvidence(str(frame_path), 0.0)],
         duration_seconds=15.0,
     )
 
@@ -298,7 +346,9 @@ def test_build_input_rejects_unsupported_image_mime_type(tmp_path):
             system_instructions="System instructions",
         ),
         transcript="spoken words",
+        transcript_available=True,
         frame_paths=[str(frame_path)],
+        frame_evidence=[models.VideoFrameEvidence(str(frame_path), 0.0)],
         duration_seconds=15.0,
     )
 

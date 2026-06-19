@@ -80,26 +80,49 @@ class OpenAIDetector:
   ) -> list[dict]:
     """Evaluate features and return OpenAI feature dictionaries."""
     prompt_config = self._build_prompt_config(feature_configs, config)
+    evidence_pack = self._select_evidence_pack(
+        preprocess_result,
+        feature_configs,
+    )
     response = self.openai_service.evaluate_features(
         prompt_config=prompt_config,
         preprocess_result=preprocess_result,
         model_name=config.openai_model,
         schema=models.OPENAI_VIDEO_RESPONSE_SCHEMA,
-        frame_paths=self._select_frames(preprocess_result, feature_configs),
+        frame_paths=evidence_pack["frame_paths"],
+        transcript=evidence_pack["transcript"],
+        transcript_available=evidence_pack["transcript_available"],
+        frame_evidence=evidence_pack["frame_evidence"],
     )
     return response.get("features", [])
 
-  def _select_frames(
+  def _select_evidence_pack(
       self,
       preprocess_result: models.VideoPreprocessResult,
       feature_configs: list[models.VideoFeature],
-  ) -> list[str]:
+  ) -> dict:
     if all(
         feature.video_segment == models.VideoSegment.FIRST_5_SECS_VIDEO
         for feature in feature_configs
     ):
-      return preprocess_result.first_5_seconds_frames
-    return preprocess_result.full_video_frames
+      return {
+          "frame_paths": preprocess_result.first_5_seconds_frames,
+          "transcript": preprocess_result.first_5_seconds_transcript,
+          "transcript_available": (
+              preprocess_result.first_5_seconds_transcript_available
+          ),
+          "frame_evidence": preprocess_result.first_5_seconds_frame_evidence,
+      }
+
+    return {
+        "frame_paths": preprocess_result.full_video_frames,
+        "transcript": (
+            preprocess_result.full_video_transcript
+            or preprocess_result.transcript
+        ),
+        "transcript_available": preprocess_result.transcript_available,
+        "frame_evidence": preprocess_result.full_video_frame_evidence,
+    }
 
   def _build_prompt_config(
       self,

@@ -91,16 +91,27 @@ class OpenAIAPIService:
       self,
       prompt_config: models.PromptConfig,
       transcript: str,
+      transcript_available: bool,
       frame_paths: list[str],
+      frame_evidence: list[models.VideoFrameEvidence],
       duration_seconds: float,
   ) -> list[dict]:
     """Build Responses API input from prompt, transcript, and images."""
     image_inputs = self._build_image_inputs(frame_paths)
+    transcript_body = (
+        transcript if transcript_available else "[no transcript available]"
+    )
+    frame_evidence_text = "\n".join(
+        f"{Path(evidence.path).name} at {evidence.timestamp_seconds}s"
+        for evidence in frame_evidence
+    )
     user_content = [{
         "type": "input_text",
         "text": (
             f"Video duration seconds: {duration_seconds}\n"
-            f"Transcript:\n{transcript or '[no transcript available]'}\n\n"
+            f"Transcript available: {transcript_available}\n"
+            f"Transcript:\n{transcript_body or '[no transcript available]'}\n\n"
+            f"Frame evidence:\n{frame_evidence_text}\n\n"
             f"{prompt_config.prompt}"
         ),
     }]
@@ -132,14 +143,19 @@ class OpenAIAPIService:
       model_name: str,
       schema: dict,
       frame_paths: list[str],
+      transcript: str,
+      transcript_available: bool,
+      frame_evidence: list[models.VideoFrameEvidence],
   ) -> dict:
     """Evaluate video features with sampled frames and transcript."""
     response = self.client.responses.create(
         model=model_name,
         input=self.build_input(
             prompt_config=prompt_config,
-            transcript=preprocess_result.transcript,
+            transcript=transcript,
+            transcript_available=transcript_available,
             frame_paths=frame_paths,
+            frame_evidence=frame_evidence,
             duration_seconds=preprocess_result.duration_seconds,
         ),
         text={

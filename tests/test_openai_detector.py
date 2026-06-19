@@ -34,6 +34,9 @@ class OpenAIServiceStub:
       model_name,
       schema,
       frame_paths,
+      transcript,
+      transcript_available,
+      frame_evidence,
   ):
     self.calls.append({
         "prompt_config": prompt_config,
@@ -41,6 +44,9 @@ class OpenAIServiceStub:
         "model_name": model_name,
         "schema": schema,
         "frame_paths": frame_paths,
+        "transcript": transcript,
+        "transcript_available": transcript_available,
+        "frame_evidence": frame_evidence,
     })
     return self.response
 
@@ -54,6 +60,16 @@ def _preprocess_result():
       audio_path=None,
       transcript="Shop now at Chewy.",
       transcript_available=True,
+      full_video_frame_evidence=[
+          models.VideoFrameEvidence("full-1.jpg", 0.0),
+          models.VideoFrameEvidence("full-2.jpg", 9.5),
+      ],
+      first_5_seconds_frame_evidence=[
+          models.VideoFrameEvidence("first-1.jpg", 2.0),
+      ],
+      full_video_transcript="Full transcript from dedicated field.",
+      first_5_seconds_transcript="First five transcript.",
+      first_5_seconds_transcript_available=False,
   )
 
 
@@ -145,6 +161,27 @@ def test_detector_selects_first_5s_frames_when_all_features_are_first_5s():
   assert service.calls[0]["frame_paths"] == ["first-1.jpg"]
 
 
+def test_detector_selects_first_5s_evidence_when_all_features_are_first_5s():
+  """First-five-second feature groups use first-five-second evidence pack."""
+  service = OpenAIServiceStub({"features": []})
+  preprocess_result = _preprocess_result()
+
+  OpenAIDetector(service).evaluate_features(
+      config=ConfigStub(),
+      preprocess_result=preprocess_result,
+      feature_configs=[
+          _feature("brand-early", models.VideoSegment.FIRST_5_SECS_VIDEO),
+          _feature("product-early", models.VideoSegment.FIRST_5_SECS_VIDEO),
+      ],
+  )
+
+  assert service.calls[0]["transcript"] == "First five transcript."
+  assert service.calls[0]["transcript_available"] is False
+  assert service.calls[0]["frame_evidence"] == [
+      models.VideoFrameEvidence("first-1.jpg", 2.0),
+  ]
+
+
 def test_detector_selects_full_frames_when_any_feature_needs_full_video():
   """Mixed feature groups keep full-video frame evidence."""
   service = OpenAIServiceStub({"features": []})
@@ -160,3 +197,40 @@ def test_detector_selects_full_frames_when_any_feature_needs_full_video():
   )
 
   assert service.calls[0]["frame_paths"] == ["full-1.jpg", "full-2.jpg"]
+
+
+def test_detector_selects_full_evidence_when_any_feature_needs_full_video():
+  """Mixed feature groups use full-video transcript and frame evidence."""
+  service = OpenAIServiceStub({"features": []})
+  preprocess_result = _preprocess_result()
+
+  OpenAIDetector(service).evaluate_features(
+      config=ConfigStub(),
+      preprocess_result=preprocess_result,
+      feature_configs=[
+          _feature("brand-early", models.VideoSegment.FIRST_5_SECS_VIDEO),
+          _feature("supers", models.VideoSegment.FULL_VIDEO),
+      ],
+  )
+
+  assert service.calls[0]["transcript"] == "Full transcript from dedicated field."
+  assert service.calls[0]["transcript_available"] is True
+  assert service.calls[0]["frame_evidence"] == [
+      models.VideoFrameEvidence("full-1.jpg", 0.0),
+      models.VideoFrameEvidence("full-2.jpg", 9.5),
+  ]
+
+
+def test_detector_falls_back_to_legacy_transcript_for_full_video_evidence():
+  """Full-video evidence falls back to the legacy transcript field."""
+  service = OpenAIServiceStub({"features": []})
+  preprocess_result = _preprocess_result()
+  preprocess_result.full_video_transcript = ""
+
+  OpenAIDetector(service).evaluate_features(
+      config=ConfigStub(),
+      preprocess_result=preprocess_result,
+      feature_configs=[_feature("supers", models.VideoSegment.FULL_VIDEO)],
+  )
+
+  assert service.calls[0]["transcript"] == "Shop now at Chewy."
