@@ -97,13 +97,19 @@ class OpenAIAPIService:
       duration_seconds: float,
   ) -> list[dict]:
     """Build Responses API input from prompt, transcript, and images."""
+    if transcript_available and not transcript.strip():
+      raise ValueError("Transcript marked available but transcript is empty")
+    aligned_frame_evidence = self._validate_frame_evidence_alignment(
+        frame_paths,
+        frame_evidence,
+    )
     image_inputs = self._build_image_inputs(frame_paths)
     transcript_body = (
         transcript if transcript_available else "[no transcript available]"
     )
     frame_evidence_text = "\n".join(
         f"{Path(evidence.path).name} at {evidence.timestamp_seconds}s"
-        for evidence in frame_evidence
+        for _, evidence in aligned_frame_evidence
     )
     user_content = [{
         "type": "input_text",
@@ -168,6 +174,34 @@ class OpenAIAPIService:
         },
     )
     return self.parse_json_response(response)
+
+  def _validate_frame_evidence_alignment(
+      self,
+      frame_paths: list[str],
+      frame_evidence: list[models.VideoFrameEvidence],
+  ) -> list[tuple[str, models.VideoFrameEvidence]]:
+    if len(frame_paths) != len(frame_evidence):
+      raise ValueError(
+          "frame evidence alignment mismatch: "
+          f"{len(frame_paths)} frame paths and "
+          f"{len(frame_evidence)} evidence entries"
+      )
+
+    aligned_frame_evidence = []
+    for index, (frame_path, evidence) in enumerate(
+        zip(frame_paths, frame_evidence, strict=True)
+    ):
+      frame_name = Path(frame_path).name
+      evidence_name = Path(evidence.path).name
+      if frame_name != evidence_name:
+        raise ValueError(
+            "frame evidence alignment mismatch at index "
+            f"{index}: frame path {frame_path!r} does not match "
+            f"evidence path {evidence.path!r}"
+        )
+      aligned_frame_evidence.append((frame_path, evidence))
+
+    return aligned_frame_evidence
 
   def parse_json_response(self, response) -> dict:
     """Parse the JSON object returned by OpenAI structured outputs."""

@@ -122,6 +122,66 @@ def test_build_input_uses_placeholder_when_transcript_unavailable(tmp_path):
   assert "Transcript:\n[no transcript available]" in text
 
 
+def test_build_input_rejects_missing_frame_evidence_for_sent_images(tmp_path):
+  """Every sent frame must have aligned timestamp evidence."""
+  frame_path = tmp_path / "frame.jpg"
+  frame_path.write_bytes(b"image")
+  service = OpenAIAPIService(client=mock.Mock())
+
+  with pytest.raises(ValueError, match="frame evidence alignment"):
+    service.build_input(
+        prompt_config=models.PromptConfig(
+            prompt="Question?",
+            system_instructions="System instructions",
+        ),
+        transcript="spoken words",
+        transcript_available=True,
+        frame_paths=[str(frame_path)],
+        frame_evidence=[],
+        duration_seconds=15.0,
+    )
+
+
+def test_build_input_rejects_mismatched_frame_evidence_path(tmp_path):
+  """Frame evidence labels must align with sent frame paths by order."""
+  frame_path = tmp_path / "frame.jpg"
+  frame_path.write_bytes(b"image")
+  service = OpenAIAPIService(client=mock.Mock())
+
+  with pytest.raises(ValueError, match="frame evidence alignment"):
+    service.build_input(
+        prompt_config=models.PromptConfig(
+            prompt="Question?",
+            system_instructions="System instructions",
+        ),
+        transcript="spoken words",
+        transcript_available=True,
+        frame_paths=[str(frame_path)],
+        frame_evidence=[models.VideoFrameEvidence("other.jpg", 3.25)],
+        duration_seconds=15.0,
+    )
+
+
+def test_build_input_rejects_available_empty_transcript(tmp_path):
+  """Transcript availability must match the selected transcript body."""
+  frame_path = tmp_path / "frame.jpg"
+  frame_path.write_bytes(b"image")
+  service = OpenAIAPIService(client=mock.Mock())
+
+  with pytest.raises(ValueError, match="Transcript marked available"):
+    service.build_input(
+        prompt_config=models.PromptConfig(
+            prompt="Question?",
+            system_instructions="System instructions",
+        ),
+        transcript="",
+        transcript_available=True,
+        frame_paths=[str(frame_path)],
+        frame_evidence=[models.VideoFrameEvidence(str(frame_path), 3.25)],
+        duration_seconds=15.0,
+    )
+
+
 def test_evaluate_features_passes_model_schema_and_parses_json(tmp_path):
   """Feature evaluation uses structured outputs and returns parsed JSON."""
   frame_path = tmp_path / "frame.jpg"

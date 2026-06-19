@@ -69,7 +69,7 @@ def _preprocess_result():
       ],
       full_video_transcript="Full transcript from dedicated field.",
       first_5_seconds_transcript="First five transcript.",
-      first_5_seconds_transcript_available=False,
+      first_5_seconds_transcript_available=True,
   )
 
 
@@ -176,10 +176,29 @@ def test_detector_selects_first_5s_evidence_when_all_features_are_first_5s():
   )
 
   assert service.calls[0]["transcript"] == "First five transcript."
-  assert service.calls[0]["transcript_available"] is False
+  assert service.calls[0]["transcript_available"] is True
   assert service.calls[0]["frame_evidence"] == [
       models.VideoFrameEvidence("first-1.jpg", 2.0),
   ]
+
+
+def test_detector_selects_explicit_unavailable_first_5s_transcript():
+  """First-five-second availability remains false when transcript is absent."""
+  service = OpenAIServiceStub({"features": []})
+  preprocess_result = _preprocess_result()
+  preprocess_result.first_5_seconds_transcript = ""
+  preprocess_result.first_5_seconds_transcript_available = False
+
+  OpenAIDetector(service).evaluate_features(
+      config=ConfigStub(),
+      preprocess_result=preprocess_result,
+      feature_configs=[
+          _feature("brand-early", models.VideoSegment.FIRST_5_SECS_VIDEO),
+      ],
+  )
+
+  assert service.calls[0]["transcript"] == ""
+  assert service.calls[0]["transcript_available"] is False
 
 
 def test_detector_selects_full_frames_when_any_feature_needs_full_video():
