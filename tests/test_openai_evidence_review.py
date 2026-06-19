@@ -3,6 +3,7 @@
 """Tests for OpenAI evidence review notebook helpers."""
 
 import importlib.util
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -55,6 +56,9 @@ def test_openai_evidence_review_notebook_references_helper_workflow():
   assert "outputs/openai_validation_sample" in source
   assert "load_feature_rows" in source
   assert "transcript_snippet" in source
+  assert ".cache/abcds-detector" in source
+  assert "load_preprocess_manifest" in source
+  assert "select_review_frame" in source
 
 
 def test_render_font_fallbacks_follow_design_order():
@@ -183,6 +187,63 @@ def test_transcript_snippet_reads_preprocessor_transcript_path(tmp_path):
   assert helper.transcript_snippet({"transcript_path": str(transcript_path)}, 8.0) == (
       "Full transcript from preprocessor."
   )
+
+
+def test_load_preprocess_manifest_uses_preprocessor_cache_key(tmp_path):
+  """Manifest loading follows the OpenAI preprocessor cache layout."""
+  video_uri = "sample_videos/youtube/ad.mp4"
+  cache_key = hashlib.sha256(video_uri.encode("utf-8")).hexdigest()[:16]
+  manifest_path = tmp_path / cache_key / "preprocess_manifest.json"
+  manifest_path.parent.mkdir()
+  manifest_path.write_text(
+      json.dumps({"source": {"original_uri": video_uri}}),
+      encoding="utf-8",
+  )
+  helper = _load_evidence_review()
+
+  manifest = helper.load_preprocess_manifest(tmp_path, video_uri)
+
+  assert manifest == {"source": {"original_uri": video_uri}}
+
+
+def test_select_review_frame_prefers_first_5_seconds_when_requested():
+  """Frame selection can focus on first-5-second evidence for review."""
+  helper = _load_evidence_review()
+  manifest = {
+      "full_video_frame_evidence": [
+          {"path": ".cache/full/frame_0001.jpg", "timestamp_seconds": 8.5}
+      ],
+      "first_5_seconds_frame_evidence": [
+          {"path": ".cache/first/frame_0001.jpg", "timestamp_seconds": 1.25}
+      ],
+  }
+
+  frame_path, timestamp_seconds = helper.select_review_frame(
+      manifest,
+      prefer_first_5=True,
+  )
+
+  assert frame_path == Path(".cache/first/frame_0001.jpg")
+  assert timestamp_seconds == 1.25
+
+
+def test_select_review_frame_falls_back_to_full_video_evidence():
+  """Frame selection uses full-video evidence when first-5s evidence is absent."""
+  helper = _load_evidence_review()
+  manifest = {
+      "first_5_seconds_frame_evidence": [],
+      "full_video_frame_evidence": [
+          {"path": ".cache/full/frame_0001.jpg", "timestamp_seconds": 6.0}
+      ],
+  }
+
+  frame_path, timestamp_seconds = helper.select_review_frame(
+      manifest,
+      prefer_first_5=True,
+  )
+
+  assert frame_path == Path(".cache/full/frame_0001.jpg")
+  assert timestamp_seconds == 6.0
 
 
 def test_load_feature_rows_flattens_assessment_feature_lists(tmp_path):

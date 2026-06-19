@@ -8,6 +8,7 @@ ffmpeg
 sample_videos
 .cache/
 outputs/
+notebooks/20260619_openai_evidence_review/figures/
 annotations_evaluation/_pycache_
 feature_configs/_pycache_
 helpers/_pycache_

@@ -2,6 +2,7 @@
 
 """Helpers for reviewing OpenAI video evidence extraction outputs."""
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -116,6 +117,53 @@ def load_json(path: str | Path) -> Any:
   """Load JSON from a local path."""
   with Path(path).open(encoding="utf-8") as input_file:
     return json.load(input_file)
+
+
+def build_preprocess_cache_key(video_uri: str) -> str:
+  """Return the OpenAI preprocessor cache key for a video URI."""
+  return hashlib.sha256(video_uri.encode("utf-8")).hexdigest()[:16]
+
+
+def load_preprocess_manifest(
+    cache_dir: str | Path,
+    video_uri: str,
+) -> dict[str, Any]:
+  """Load a preprocessor manifest from the OpenAI cache layout."""
+  manifest_path = (
+      Path(cache_dir)
+      / build_preprocess_cache_key(video_uri)
+      / "preprocess_manifest.json"
+  )
+  return load_json(manifest_path)
+
+
+def select_review_frame(
+    manifest: dict[str, Any],
+    prefer_first_5: bool = False,
+) -> tuple[Path, float]:
+  """Select a frame path and timestamp from preprocessor evidence lists."""
+  evidence_keys = (
+      (
+          "first_5_seconds_frame_evidence",
+          "full_video_frame_evidence",
+      )
+      if prefer_first_5
+      else (
+          "full_video_frame_evidence",
+          "first_5_seconds_frame_evidence",
+      )
+  )
+
+  for evidence_key in evidence_keys:
+    for frame in manifest.get(evidence_key, []) or []:
+      frame_path = str(frame.get("path", "")).strip()
+      if frame_path:
+        return (
+            Path(frame_path),
+            float(frame.get("timestamp_seconds", 0.0)),
+        )
+
+  raise ValueError("No frame evidence found in preprocess manifest.")
 
 
 def transcript_snippet(

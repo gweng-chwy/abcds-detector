@@ -10,7 +10,9 @@ checklist on the right.
 - Local sample videos grouped under first-level platform folders, for example
   `sample_videos/local/*.mp4` or `sample_videos/youtube/*.mov`.
 - A JSON assessment file produced by `main.py -assessment_file ...`.
-- Extracted frame images and preprocessing manifests from the local cache.
+- Extracted frame images and preprocessing manifests from
+  `.cache/abcds-detector/<cache_key>/preprocess_manifest.json`, where
+  `<cache_key>` is the first 16 characters of the SHA-256 hash of the video URI.
 
 Generated videos, frames, transcripts, cache directories, and rendered figures
 should stay untracked.
@@ -35,5 +37,5 @@ visualization plumbing; it does not validate brand classification accuracy.
 
 `render_evidence_figure` saves a monochrome Keynote-ratio PNG at 150 dpi. The
 notebook uses `notebooks/20260619_openai_evidence_review/figures/` for Keynote
-handoff figures, and those rendered artifacts should stay untracked. For
-gitignored scratch output, use `outputs/openai_validation_sample/`.
+handoff figures, and that generated directory is gitignored. For additional
+scratch output, use `outputs/openai_validation_sample/`.
