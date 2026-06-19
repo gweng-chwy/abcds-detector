@@ -282,6 +282,16 @@ class VideoPreprocessor:
       ).read_text(encoding="utf-8")
     except (OSError, TypeError, ValueError):
       return None
+    transcript_available = bool(manifest.get("transcript_available"))
+    first_5_seconds_transcript_available = bool(
+        manifest.get("first_5_seconds_transcript_available")
+    )
+    if transcript_available != bool(transcript):
+      return None
+    if first_5_seconds_transcript_available != bool(
+        first_5_seconds_transcript
+    ):
+      return None
 
     return models.VideoPreprocessResult(
         source=source,
@@ -294,14 +304,14 @@ class VideoPreprocessor:
         ],
         audio_path=audio_path,
         transcript=transcript,
-        transcript_available=bool(manifest.get("transcript_available")),
+        transcript_available=transcript_available,
         full_video_frame_evidence=full_video_frame_evidence,
         first_5_seconds_frame_evidence=first_5_seconds_frame_evidence,
         full_video_transcript=transcript,
         first_5_seconds_audio_path=first_5_seconds_audio_path,
         first_5_seconds_transcript=first_5_seconds_transcript,
-        first_5_seconds_transcript_available=bool(
-            manifest.get("first_5_seconds_transcript_available")
+        first_5_seconds_transcript_available=(
+            first_5_seconds_transcript_available
         ),
         preprocess_manifest_path=str(manifest_path),
     )

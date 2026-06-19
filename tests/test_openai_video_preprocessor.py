@@ -487,6 +487,121 @@ def test_missing_manifest_transcript_rebuilds_cache(tmp_path, monkeypatch):
   ) == "rebuilt full"
 
 
+def test_manifest_transcript_availability_mismatch_rebuilds_cache(
+    tmp_path, monkeypatch
+):
+  """Transcript availability flags must match cached transcript file content."""
+  video_path = tmp_path / "video.mp4"
+  video_path.write_bytes(b"video")
+  cache_dir = tmp_path / "cache"
+  source = models.VideoSource(
+      original_uri=str(video_path),
+      local_path=str(video_path),
+      source_type=models.CreativeProviderType.LOCAL.value,
+  )
+  manifest_path = _write_manifest(
+      cache_dir,
+      source,
+      max_frames=1,
+      frame_sample_rate=1.0,
+      transcript="cached full",
+      first_5_seconds_transcript="cached first",
+  )
+  manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+  Path(manifest["transcript_path"]).write_text("", encoding="utf-8")
+  manifest["transcript_available"] = True
+  manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+  commands = []
+
+  class FakeOpenAIService:
+
+    def transcribe_audio(self, audio_path, model_name="gpt-4o-transcribe"):
+      if audio_path.endswith("audio_first_5s.mp3"):
+        return "rebuilt first"
+      return "rebuilt full"
+
+  def fake_run(cmd, check, capture_output, text, timeout):
+    assert check is True
+    assert capture_output is True
+    assert text is True
+    assert timeout == 300
+    commands.append(cmd)
+    if cmd[0] == "ffprobe":
+      return SimpleNamespace(stdout="3.0\n")
+    if cmd[0] == "ffmpeg" and cmd[-1].endswith(".jpg"):
+      _write_exact_frame_output(cmd)
+    if cmd[0] == "ffmpeg" and cmd[-1].endswith(".mp3"):
+      Path(cmd[-1]).write_bytes(b"fresh audio")
+    return SimpleNamespace(stdout="")
+
+  monkeypatch.setattr(preprocessor_module.subprocess, "run", fake_run)
+
+  result = VideoPreprocessor(
+      cache_dir=str(cache_dir),
+      max_frames=1,
+      frame_sample_rate=1.0,
+      openai_service=FakeOpenAIService(),
+  ).preprocess(source)
+
+  assert [cmd[0] for cmd in commands].count("ffprobe") == 1
+  assert result.transcript == "rebuilt full"
+  assert result.transcript_available is True
+
+
+def test_preprocessing_reuses_no_audio_manifest_cache(tmp_path, monkeypatch):
+  """Manifest cache without audio artifacts loads empty transcripts as unavailable."""
+  video_path = tmp_path / "video.mp4"
+  video_path.write_bytes(b"video")
+  cache_dir = tmp_path / "cache"
+  source = models.VideoSource(
+      original_uri=str(video_path),
+      local_path=str(video_path),
+      source_type=models.CreativeProviderType.LOCAL.value,
+  )
+  manifest_path = _write_manifest(
+      cache_dir,
+      source,
+      max_frames=1,
+      frame_sample_rate=1.0,
+      transcript="",
+      first_5_seconds_transcript="",
+  )
+  manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+  Path(manifest["audio_path"]).unlink()
+  Path(manifest["first_5_seconds_audio_path"]).unlink()
+  manifest["audio_path"] = None
+  manifest["first_5_seconds_audio_path"] = None
+  manifest["transcript_available"] = False
+  manifest["first_5_seconds_transcript_available"] = False
+  manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+  class UnexpectedOpenAIService:
+
+    def transcribe_audio(self, audio_path, model_name="gpt-4o-transcribe"):
+      raise AssertionError("transcription should not run on cache hit")
+
+  def fake_run(cmd, check, capture_output, text, timeout):
+    raise AssertionError(f"subprocess should not run on cache hit: {cmd}")
+
+  monkeypatch.setattr(preprocessor_module.subprocess, "run", fake_run)
+
+  result = VideoPreprocessor(
+      cache_dir=str(cache_dir),
+      max_frames=1,
+      frame_sample_rate=1.0,
+      openai_service=UnexpectedOpenAIService(),
+  ).preprocess(source)
+
+  assert result.audio_path is None
+  assert result.first_5_seconds_audio_path is None
+  assert result.transcript == ""
+  assert result.full_video_transcript == ""
+  assert result.first_5_seconds_transcript == ""
+  assert result.transcript_available is False
+  assert result.first_5_seconds_transcript_available is False
+  assert result.preprocess_manifest_path == str(manifest_path)
+
+
 def test_local_preprocessing_extracts_first_5s_audio_and_transcript(
     tmp_path, monkeypatch
 ):
