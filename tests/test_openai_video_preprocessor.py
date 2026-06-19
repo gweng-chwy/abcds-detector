@@ -97,7 +97,14 @@ def test_frame_extraction_retries_slightly_before_missing_endpoint(
     assert text is True
     assert timeout == 300
     commands.append(cmd)
-    if cmd[cmd.index("-ss") + 1] == "9.95":
+    seek_time = cmd[cmd.index("-ss") + 1]
+    if seek_time == "10.00":
+      raise preprocessor_module.subprocess.CalledProcessError(
+          returncode=1,
+          cmd=cmd,
+          stderr="Output file is empty",
+      )
+    if seek_time == "9.95":
       Path(cmd[-1]).write_bytes(b"frame")
     return SimpleNamespace(stdout="")
 
@@ -117,6 +124,37 @@ def test_frame_extraction_retries_slightly_before_missing_endpoint(
           timestamp_seconds=10.0,
       )
   ]
+
+
+def test_frame_extraction_failure_at_zero_timestamp_still_raises(
+    tmp_path, monkeypatch
+):
+  """Zero timestamp extraction failures are not treated as EOF retries."""
+  video_path = tmp_path / "video.mp4"
+  video_path.write_bytes(b"video")
+  output_dir = tmp_path / "frames"
+  output_dir.mkdir()
+
+  def fake_run(cmd, check, capture_output, text, timeout):
+    assert check is True
+    assert capture_output is True
+    assert text is True
+    assert timeout == 300
+    raise preprocessor_module.subprocess.CalledProcessError(
+        returncode=1,
+        cmd=cmd,
+        stderr="decode failed",
+    )
+
+  monkeypatch.setattr(preprocessor_module.subprocess, "run", fake_run)
+
+  with pytest.raises(RuntimeError, match="decode failed"):
+    VideoPreprocessor(
+        cache_dir=str(tmp_path / "cache"),
+        max_frames=1,
+        frame_sample_rate=1.0,
+        openai_service=object(),
+    )._extract_frames_at_timestamps(str(video_path), output_dir, [0.0])
 
 
 def test_local_source_requires_existing_path(tmp_path):

@@ -217,17 +217,21 @@ class VideoPreprocessor:
     evidence = []
     for index, timestamp in enumerate(timestamps, start=1):
       output_path = output_dir / f"frame_{index:04d}.jpg"
-      self._run([
-          "ffmpeg",
-          "-y",
-          "-ss",
-          f"{timestamp:.2f}",
-          "-i",
-          video_path,
-          "-frames:v",
-          "1",
-          str(output_path),
-      ])
+      try:
+        self._run([
+            "ffmpeg",
+            "-y",
+            "-ss",
+            f"{timestamp:.2f}",
+            "-i",
+            video_path,
+            "-frames:v",
+            "1",
+            str(output_path),
+        ])
+      except RuntimeError:
+        if timestamp <= 0:
+          raise
       if not output_path.exists() and timestamp > 0:
         retry_timestamp = max(0.0, timestamp - 0.05)
         self._run([
