@@ -248,6 +248,75 @@ Focused unit tests should cover:
 Manual verification can use private videos under `sample_videos/`, but those
 assets and generated cache outputs must remain untracked.
 
+## Post-Implementation Validation Run
+
+After detector implementation and unit verification, run a real OpenAI pipeline
+sample over local private videos.
+
+The validation script or command sequence should:
+
+- discover videos under `sample_videos/<platform>/**`;
+- treat the first directory under `sample_videos` as the platform name;
+- randomly choose up to 2 videos per platform with a fixed seed;
+- use all available videos when a platform has fewer than 2 videos;
+- run both long-form ABCD and Shorts features by default;
+- write outputs under `outputs/openai_validation_sample/`;
+- reuse cache by default and avoid `--refresh_cache` unless specifically
+  validating rebuild behavior.
+
+The user's `OPENAI_API_KEY` is available from `.zshrc`. The validation command
+should run in a shell environment that loads that key. If the key is not present
+at runtime, skip the live API run and report that validation is blocked by local
+environment setup.
+
+Generated outputs, private videos, extracted frames, audio, transcripts, and
+cache artifacts must remain untracked.
+
+## Evidence Review Notebook
+
+Create a dedicated notebook folder after the validation run:
+
+```text
+notebooks/20260619_openai_evidence_review/
+  README.md
+  openai_evidence_review.ipynb
+  figures/
+```
+
+The notebook should load:
+
+- the validation assessment JSON;
+- each selected video's preprocess manifest;
+- extracted frame paths and frame timestamps;
+- transcript text or timecoded transcript segments when available.
+
+For each selected video, produce slide-like 16:9 figures suitable for the
+default Keynote widescreen ratio. Each figure should place evidence on the left
+and detected feature status on the right:
+
+- left side: extracted frame and transcript snippet around that frame time;
+- right side: feature checklist with checked state when `detected` is true;
+- separate or clearly group long-form and Shorts features;
+- use the largest practical font size that fits the 16:9 canvas;
+- follow `DESIGN.md` typography: `figmaSans` when available, then Inter,
+  Geist, system sans; use `figmaMono` or monospace fallback only for captions
+  and metadata;
+- use monochrome styling unless a later review explicitly asks for color.
+
+If timecoded transcript segments are available, show transcript text within a
+small window around the frame timestamp, such as plus or minus 2.5 seconds. If
+only plain transcript text is available, show a compact transcript excerpt and
+label it as not timecoded.
+
+Notebook acceptance criteria:
+
+- creates at least one generated 16:9 figure per sampled video;
+- frame content is readable;
+- checklist text is legible at Keynote ratio;
+- notebook paths are relative to its folder or repository root;
+- generated figure files live under the notebook folder;
+- generated outputs remain local and untracked unless explicitly requested.
+
 ## Implementation Boundaries
 
 Expected files to modify:
@@ -262,6 +331,8 @@ Expected files to modify:
   evidence by feature group.
 - `llms_evaluation/openai_api_service.py`: include frame timestamp labels in
   prompt input.
+- `notebooks/20260619_openai_evidence_review/`: evidence review notebook and
+  README created after implementation validation.
 - Tests under `tests/`.
 
 Files intentionally not touched:
@@ -281,4 +352,9 @@ Files intentionally not touched:
 - OpenAI prompt text includes frame timestamps.
 - Unit tests prove cache hit, cache invalidation, evidence selection, and prompt
   timestamp behavior.
+- Post-implementation validation samples up to 2 videos per platform from
+  `sample_videos/` and writes JSON/CSV under
+  `outputs/openai_validation_sample/`.
+- Evidence review notebook generates 16:9 frame/transcript/checklist figures
+  under `notebooks/20260619_openai_evidence_review/`.
 - No changes are made to `docs/feature_inventory/*`.
