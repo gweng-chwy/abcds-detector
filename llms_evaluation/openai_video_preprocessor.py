@@ -112,9 +112,11 @@ class VideoPreprocessor:
     transcript = ""
     transcript_available = False
     result_audio_path = None
+    transcript_error = False
     first_5_seconds_transcript = ""
     first_5_seconds_transcript_available = False
     result_first_5s_audio_path = None
+    first_5_seconds_transcript_error = False
     if audio_available:
       result_audio_path = str(audio_path)
       try:
@@ -125,6 +127,7 @@ class VideoPreprocessor:
       except Exception:
         transcript = ""
         transcript_available = False
+        transcript_error = True
       try:
         self._extract_first_5s_audio(local_source.local_path, first_5s_audio_path)
         if first_5s_audio_path.exists():
@@ -139,6 +142,7 @@ class VideoPreprocessor:
           except Exception:
             first_5_seconds_transcript = ""
             first_5_seconds_transcript_available = False
+            first_5_seconds_transcript_error = True
       except RuntimeError:
         if first_5s_audio_path.exists():
           first_5s_audio_path.unlink()
@@ -174,6 +178,8 @@ class VideoPreprocessor:
         result,
         transcript_path,
         first_5s_transcript_path,
+        transcript_error=transcript_error,
+        first_5_seconds_transcript_error=first_5_seconds_transcript_error,
     )
     return result
 
@@ -249,6 +255,10 @@ class VideoPreprocessor:
       return None
     if manifest.get("settings") != self._settings_fingerprint():
       return None
+    if manifest.get("transcript_error"):
+      return None
+    if manifest.get("first_5_seconds_transcript_error"):
+      return None
 
     full_video_frame_evidence = self._manifest_frame_evidence(
         manifest.get("full_video_frame_evidence")
@@ -322,6 +332,8 @@ class VideoPreprocessor:
       result: models.VideoPreprocessResult,
       transcript_path: Path,
       first_transcript_path: Path,
+      transcript_error: bool = False,
+      first_5_seconds_transcript_error: bool = False,
   ) -> None:
     manifest = {
         "schema_version": _MANIFEST_SCHEMA_VERSION,
@@ -350,6 +362,10 @@ class VideoPreprocessor:
         "transcript_available": result.transcript_available,
         "first_5_seconds_transcript_available": (
             result.first_5_seconds_transcript_available
+        ),
+        "transcript_error": transcript_error,
+        "first_5_seconds_transcript_error": (
+            first_5_seconds_transcript_error
         ),
     }
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")

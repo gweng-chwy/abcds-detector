@@ -162,6 +162,32 @@ def test_build_input_rejects_mismatched_frame_evidence_path(tmp_path):
     )
 
 
+def test_build_input_rejects_same_basename_different_frame_evidence_path(
+    tmp_path
+):
+  """Frame evidence alignment compares the full normalized path."""
+  frame_path = tmp_path / "frames" / "full" / "frame_0001.jpg"
+  evidence_path = tmp_path / "frames" / "first_5s" / "frame_0001.jpg"
+  frame_path.parent.mkdir(parents=True)
+  evidence_path.parent.mkdir(parents=True)
+  frame_path.write_bytes(b"image")
+  evidence_path.write_bytes(b"other image")
+  service = OpenAIAPIService(client=mock.Mock())
+
+  with pytest.raises(ValueError, match="frame evidence alignment"):
+    service.build_input(
+        prompt_config=models.PromptConfig(
+            prompt="Question?",
+            system_instructions="System instructions",
+        ),
+        transcript="spoken words",
+        transcript_available=True,
+        frame_paths=[str(frame_path)],
+        frame_evidence=[models.VideoFrameEvidence(str(evidence_path), 3.25)],
+        duration_seconds=15.0,
+    )
+
+
 def test_build_input_rejects_available_empty_transcript(tmp_path):
   """Transcript availability must match the selected transcript body."""
   frame_path = tmp_path / "frame.jpg"

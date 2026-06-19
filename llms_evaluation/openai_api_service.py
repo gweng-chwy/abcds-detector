@@ -56,6 +56,14 @@ def _make_schema_objects_strict(schema_fragment) -> None:
       _make_schema_objects_strict(item)
 
 
+def _normalized_path(path: str) -> Path:
+  expanded_path = Path(path).expanduser()
+  try:
+    return expanded_path.resolve(strict=False)
+  except (OSError, RuntimeError):
+    return expanded_path.absolute()
+
+
 class OpenAIAPIService:
   """Wrapper around OpenAI APIs used by the OpenAI evaluation path."""
 
@@ -191,9 +199,9 @@ class OpenAIAPIService:
     for index, (frame_path, evidence) in enumerate(
         zip(frame_paths, frame_evidence, strict=True)
     ):
-      frame_name = Path(frame_path).name
-      evidence_name = Path(evidence.path).name
-      if frame_name != evidence_name:
+      normalized_frame_path = _normalized_path(frame_path)
+      normalized_evidence_path = _normalized_path(evidence.path)
+      if normalized_frame_path != normalized_evidence_path:
         raise ValueError(
             "frame evidence alignment mismatch at index "
             f"{index}: frame path {frame_path!r} does not match "

@@ -1021,6 +1021,77 @@ def test_transcription_failure_does_not_fail_preprocessing(tmp_path, monkeypatch
   assert result.transcript_available is False
 
 
+def test_transcription_failure_manifest_is_not_reused_on_next_run(
+    tmp_path, monkeypatch
+):
+  """Transient full transcription failures are retried instead of cached."""
+  video_path = tmp_path / "video.mp4"
+  video_path.write_bytes(b"video")
+  cache_dir = tmp_path / "cache"
+  source = models.VideoSource(
+      original_uri=str(video_path),
+      local_path=str(video_path),
+      source_type=models.CreativeProviderType.LOCAL.value,
+  )
+  commands = []
+
+  class FailingOpenAIService:
+
+    def transcribe_audio(self, audio_path, model_name="gpt-4o-transcribe"):
+      raise RuntimeError("transcription failed")
+
+  class RetryingOpenAIService:
+
+    def transcribe_audio(self, audio_path, model_name="gpt-4o-transcribe"):
+      if audio_path.endswith("audio_first_5s.mp3"):
+        return "retry first"
+      return "retry full"
+
+  def fake_run(cmd, check, capture_output, text, timeout):
+    assert check is True
+    assert capture_output is True
+    assert text is True
+    assert timeout == 300
+    commands.append(cmd)
+    if cmd[0] == "ffprobe":
+      return SimpleNamespace(stdout="3.0\n")
+    if cmd[0] == "ffmpeg" and cmd[-1].endswith(".jpg"):
+      _write_exact_frame_output(cmd)
+    if cmd[0] == "ffmpeg" and cmd[-1].endswith(".mp3"):
+      Path(cmd[-1]).write_bytes(b"audio")
+    return SimpleNamespace(stdout="")
+
+  monkeypatch.setattr(preprocessor_module.subprocess, "run", fake_run)
+
+  first_result = VideoPreprocessor(
+      cache_dir=str(cache_dir),
+      max_frames=1,
+      frame_sample_rate=1.0,
+      openai_service=FailingOpenAIService(),
+  ).preprocess(source)
+  manifest_path = Path(first_result.preprocess_manifest_path)
+  manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+  second_result = VideoPreprocessor(
+      cache_dir=str(cache_dir),
+      max_frames=1,
+      frame_sample_rate=1.0,
+      openai_service=RetryingOpenAIService(),
+  ).preprocess(source)
+
+  assert first_result.audio_path == str(
+      cache_dir / build_cache_key(str(video_path)) / "audio.mp3"
+  )
+  assert first_result.transcript == ""
+  assert first_result.transcript_available is False
+  assert manifest["transcript_error"] is True
+  assert [cmd[0] for cmd in commands].count("ffprobe") == 2
+  assert second_result.transcript == "retry full"
+  assert second_result.transcript_available is True
+  assert second_result.first_5_seconds_transcript == "retry first"
+  assert second_result.first_5_seconds_transcript_available is True
+
+
 def test_first_5s_transcription_failure_keeps_extracted_audio_path(
     tmp_path, monkeypatch
 ):
@@ -1075,6 +1146,78 @@ def test_first_5s_transcription_failure_keeps_extracted_audio_path(
   assert first_5s_audio_path.exists()
   assert result.first_5_seconds_transcript == ""
   assert result.first_5_seconds_transcript_available is False
+
+
+def test_first_5s_transcription_failure_manifest_is_not_reused_on_next_run(
+    tmp_path, monkeypatch
+):
+  """Transient first-5 transcription failures are retried instead of cached."""
+  video_path = tmp_path / "video.mp4"
+  video_path.write_bytes(b"video")
+  cache_dir = tmp_path / "cache"
+  source = models.VideoSource(
+      original_uri=str(video_path),
+      local_path=str(video_path),
+      source_type=models.CreativeProviderType.LOCAL.value,
+  )
+  commands = []
+
+  class First5TranscriptionFailingService:
+
+    def transcribe_audio(self, audio_path, model_name="gpt-4o-transcribe"):
+      if audio_path.endswith("audio_first_5s.mp3"):
+        raise RuntimeError("first-5 transcription failed")
+      return "full transcript"
+
+  class RetryingOpenAIService:
+
+    def transcribe_audio(self, audio_path, model_name="gpt-4o-transcribe"):
+      if audio_path.endswith("audio_first_5s.mp3"):
+        return "retry first"
+      return "retry full"
+
+  def fake_run(cmd, check, capture_output, text, timeout):
+    assert check is True
+    assert capture_output is True
+    assert text is True
+    assert timeout == 300
+    commands.append(cmd)
+    if cmd[0] == "ffprobe":
+      return SimpleNamespace(stdout="3.0\n")
+    if cmd[0] == "ffmpeg" and cmd[-1].endswith(".jpg"):
+      _write_exact_frame_output(cmd)
+    if cmd[0] == "ffmpeg" and cmd[-1].endswith(".mp3"):
+      Path(cmd[-1]).write_bytes(b"audio")
+    return SimpleNamespace(stdout="")
+
+  monkeypatch.setattr(preprocessor_module.subprocess, "run", fake_run)
+
+  first_result = VideoPreprocessor(
+      cache_dir=str(cache_dir),
+      max_frames=1,
+      frame_sample_rate=1.0,
+      openai_service=First5TranscriptionFailingService(),
+  ).preprocess(source)
+  manifest_path = Path(first_result.preprocess_manifest_path)
+  manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+  second_result = VideoPreprocessor(
+      cache_dir=str(cache_dir),
+      max_frames=1,
+      frame_sample_rate=1.0,
+      openai_service=RetryingOpenAIService(),
+  ).preprocess(source)
+
+  assert first_result.transcript == "full transcript"
+  assert first_result.first_5_seconds_audio_path == str(
+      cache_dir / build_cache_key(str(video_path)) / "audio_first_5s.mp3"
+  )
+  assert first_result.first_5_seconds_transcript == ""
+  assert manifest["first_5_seconds_transcript_error"] is True
+  assert [cmd[0] for cmd in commands].count("ffprobe") == 2
+  assert second_result.transcript == "retry full"
+  assert second_result.first_5_seconds_transcript == "retry first"
+  assert second_result.first_5_seconds_transcript_available is True
 
 
 def test_empty_first_5s_transcript_keeps_extracted_audio_path(
