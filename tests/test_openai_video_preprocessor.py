@@ -81,6 +81,44 @@ def test_frame_timestamps_fall_back_to_zero_for_empty_or_single_frame(tmp_path):
   assert single_frame_preprocessor._first_5s_timestamps(10.0) == [0.0]
 
 
+def test_frame_extraction_retries_slightly_before_missing_endpoint(
+    tmp_path, monkeypatch
+):
+  """Endpoint frame extraction retries earlier while preserving evidence time."""
+  video_path = tmp_path / "video.mp4"
+  video_path.write_bytes(b"video")
+  output_dir = tmp_path / "frames"
+  output_dir.mkdir()
+  commands = []
+
+  def fake_run(cmd, check, capture_output, text, timeout):
+    assert check is True
+    assert capture_output is True
+    assert text is True
+    assert timeout == 300
+    commands.append(cmd)
+    if cmd[cmd.index("-ss") + 1] == "9.95":
+      Path(cmd[-1]).write_bytes(b"frame")
+    return SimpleNamespace(stdout="")
+
+  monkeypatch.setattr(preprocessor_module.subprocess, "run", fake_run)
+
+  evidence = VideoPreprocessor(
+      cache_dir=str(tmp_path / "cache"),
+      max_frames=1,
+      frame_sample_rate=1.0,
+      openai_service=object(),
+  )._extract_frames_at_timestamps(str(video_path), output_dir, [10.0])
+
+  assert [cmd[cmd.index("-ss") + 1] for cmd in commands] == ["10.00", "9.95"]
+  assert evidence == [
+      models.VideoFrameEvidence(
+          path=str(output_dir / "frame_0001.jpg"),
+          timestamp_seconds=10.0,
+      )
+  ]
+
+
 def test_local_source_requires_existing_path(tmp_path):
   """Missing local videos fail before subprocess work starts."""
   source = models.VideoSource(
@@ -456,6 +494,173 @@ def test_transcription_failure_does_not_fail_preprocessing(tmp_path, monkeypatch
   )
   assert result.transcript == ""
   assert result.transcript_available is False
+
+
+def test_first_5s_transcription_failure_keeps_extracted_audio_path(
+    tmp_path, monkeypatch
+):
+  """A first-5 transcription failure keeps the extracted first-5 audio."""
+  video_path = tmp_path / "video.mp4"
+  video_path.write_bytes(b"video")
+  cache_dir = tmp_path / "cache"
+  source = models.VideoSource(
+      original_uri=str(video_path),
+      local_path=str(video_path),
+      source_type=models.CreativeProviderType.LOCAL.value,
+  )
+
+  class First5TranscriptionFailingService:
+
+    def transcribe_audio(self, audio_path, model_name="gpt-4o-transcribe"):
+      if audio_path.endswith("audio_first_5s.mp3"):
+        raise RuntimeError("first-5 transcription failed")
+      return "full transcript"
+
+  def fake_run(cmd, check, capture_output, text, timeout):
+    assert check is True
+    assert capture_output is True
+    assert text is True
+    assert timeout == 300
+    if cmd[0] == "ffprobe":
+      return SimpleNamespace(stdout="3.0\n")
+    if cmd[0] == "ffmpeg" and cmd[-1].endswith(".jpg"):
+      _write_exact_frame_output(cmd)
+    if cmd[0] == "ffmpeg" and cmd[-1].endswith(".mp3"):
+      Path(cmd[-1]).write_bytes(b"audio")
+    return SimpleNamespace(stdout="")
+
+  monkeypatch.setattr(preprocessor_module.subprocess, "run", fake_run)
+
+  result = VideoPreprocessor(
+      cache_dir=str(cache_dir),
+      max_frames=1,
+      frame_sample_rate=1.0,
+      openai_service=First5TranscriptionFailingService(),
+  ).preprocess(source)
+
+  first_5s_audio_path = cache_dir / build_cache_key(
+      str(video_path)
+  ) / "audio_first_5s.mp3"
+  assert result.audio_path == str(
+      cache_dir / build_cache_key(str(video_path)) / "audio.mp3"
+  )
+  assert result.transcript == "full transcript"
+  assert result.transcript_available is True
+  assert result.first_5_seconds_audio_path == str(first_5s_audio_path)
+  assert first_5s_audio_path.exists()
+  assert result.first_5_seconds_transcript == ""
+  assert result.first_5_seconds_transcript_available is False
+
+
+def test_empty_first_5s_transcript_keeps_extracted_audio_path(
+    tmp_path, monkeypatch
+):
+  """An empty first-5 transcript still returns the extracted audio path."""
+  video_path = tmp_path / "video.mp4"
+  video_path.write_bytes(b"video")
+  cache_dir = tmp_path / "cache"
+  source = models.VideoSource(
+      original_uri=str(video_path),
+      local_path=str(video_path),
+      source_type=models.CreativeProviderType.LOCAL.value,
+  )
+
+  class EmptyFirst5TranscriptService:
+
+    def transcribe_audio(self, audio_path, model_name="gpt-4o-transcribe"):
+      if audio_path.endswith("audio_first_5s.mp3"):
+        return ""
+      return "full transcript"
+
+  def fake_run(cmd, check, capture_output, text, timeout):
+    assert check is True
+    assert capture_output is True
+    assert text is True
+    assert timeout == 300
+    if cmd[0] == "ffprobe":
+      return SimpleNamespace(stdout="3.0\n")
+    if cmd[0] == "ffmpeg" and cmd[-1].endswith(".jpg"):
+      _write_exact_frame_output(cmd)
+    if cmd[0] == "ffmpeg" and cmd[-1].endswith(".mp3"):
+      Path(cmd[-1]).write_bytes(b"audio")
+    return SimpleNamespace(stdout="")
+
+  monkeypatch.setattr(preprocessor_module.subprocess, "run", fake_run)
+
+  result = VideoPreprocessor(
+      cache_dir=str(cache_dir),
+      max_frames=1,
+      frame_sample_rate=1.0,
+      openai_service=EmptyFirst5TranscriptService(),
+  ).preprocess(source)
+
+  first_5s_audio_path = cache_dir / build_cache_key(
+      str(video_path)
+  ) / "audio_first_5s.mp3"
+  assert result.first_5_seconds_audio_path == str(first_5s_audio_path)
+  assert first_5s_audio_path.exists()
+  assert result.first_5_seconds_transcript == ""
+  assert result.first_5_seconds_transcript_available is False
+
+
+def test_first_5s_audio_extraction_failure_removes_partial_audio(
+    tmp_path, monkeypatch
+):
+  """A failed first-5 extraction removes partial audio and omits its path."""
+  video_path = tmp_path / "video.mp4"
+  video_path.write_bytes(b"video")
+  cache_dir = tmp_path / "cache"
+  source = models.VideoSource(
+      original_uri=str(video_path),
+      local_path=str(video_path),
+      source_type=models.CreativeProviderType.LOCAL.value,
+  )
+  transcription_calls = []
+
+  class FakeOpenAIService:
+
+    def transcribe_audio(self, audio_path, model_name="gpt-4o-transcribe"):
+      transcription_calls.append(audio_path)
+      return "full transcript"
+
+  def fake_run(cmd, check, capture_output, text, timeout):
+    assert check is True
+    assert capture_output is True
+    assert text is True
+    assert timeout == 300
+    if cmd[0] == "ffprobe":
+      return SimpleNamespace(stdout="3.0\n")
+    if cmd[0] == "ffmpeg" and cmd[-1].endswith(".jpg"):
+      _write_exact_frame_output(cmd)
+    if cmd[0] == "ffmpeg" and cmd[-1].endswith("audio_first_5s.mp3"):
+      Path(cmd[-1]).write_bytes(b"partial audio")
+      raise preprocessor_module.subprocess.CalledProcessError(
+          returncode=1,
+          cmd=cmd,
+          stderr="first-5 extraction failed",
+      )
+    if cmd[0] == "ffmpeg" and cmd[-1].endswith(".mp3"):
+      Path(cmd[-1]).write_bytes(b"audio")
+    return SimpleNamespace(stdout="")
+
+  monkeypatch.setattr(preprocessor_module.subprocess, "run", fake_run)
+
+  result = VideoPreprocessor(
+      cache_dir=str(cache_dir),
+      max_frames=1,
+      frame_sample_rate=1.0,
+      openai_service=FakeOpenAIService(),
+  ).preprocess(source)
+
+  video_cache_dir = cache_dir / build_cache_key(str(video_path))
+  assert result.audio_path == str(video_cache_dir / "audio.mp3")
+  assert result.transcript == "full transcript"
+  assert result.transcript_available is True
+  assert result.first_5_seconds_audio_path is None
+  assert not (video_cache_dir / "audio_first_5s.mp3").exists()
+  assert result.first_5_seconds_transcript == ""
+  assert result.first_5_seconds_transcript_available is False
+  assert transcription_calls == [str(video_cache_dir / "audio.mp3")]
 
 
 def test_audio_extraction_failure_does_not_fail_preprocessing(tmp_path, monkeypatch):

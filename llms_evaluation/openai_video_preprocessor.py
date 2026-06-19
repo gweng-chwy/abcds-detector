@@ -101,15 +101,20 @@ class VideoPreprocessor:
       try:
         self._extract_first_5s_audio(local_source.local_path, first_5s_audio_path)
         if first_5s_audio_path.exists():
-          first_5_seconds_transcript = self.openai_service.transcribe_audio(
-              str(first_5s_audio_path), model_name=self.transcription_model
-          )
-          first_5_seconds_transcript_available = bool(
-              first_5_seconds_transcript
-          )
-          if first_5_seconds_transcript_available:
-            result_first_5s_audio_path = str(first_5s_audio_path)
-      except Exception:
+          result_first_5s_audio_path = str(first_5s_audio_path)
+          try:
+            first_5_seconds_transcript = self.openai_service.transcribe_audio(
+                str(first_5s_audio_path), model_name=self.transcription_model
+            )
+            first_5_seconds_transcript_available = bool(
+                first_5_seconds_transcript
+            )
+          except Exception:
+            first_5_seconds_transcript = ""
+            first_5_seconds_transcript_available = False
+      except RuntimeError:
+        if first_5s_audio_path.exists():
+          first_5s_audio_path.unlink()
         first_5_seconds_transcript = ""
         first_5_seconds_transcript_available = False
         result_first_5s_audio_path = None
@@ -223,6 +228,19 @@ class VideoPreprocessor:
           "1",
           str(output_path),
       ])
+      if not output_path.exists() and timestamp > 0:
+        retry_timestamp = max(0.0, timestamp - 0.05)
+        self._run([
+            "ffmpeg",
+            "-y",
+            "-ss",
+            f"{retry_timestamp:.2f}",
+            "-i",
+            video_path,
+            "-frames:v",
+            "1",
+            str(output_path),
+        ])
       if output_path.exists():
         evidence.append(models.VideoFrameEvidence(
             path=str(output_path),
