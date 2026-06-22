@@ -226,7 +226,7 @@ def parse_args(arg_list: list[str] | None = None) -> argparse.Namespace:
   parser.add_argument(
       "--max_frames",
       "-mfr",
-      help="Maximum frames to sample for OpenAI video evaluation",
+      help="Maximum first-5-second frames to sample for OpenAI video evaluation",
       type=int,
       default=24,
   )

@@ -394,6 +394,13 @@ def test_build_input_rejects_too_many_frames(tmp_path):
     )
 
 
+def test_default_frame_count_uses_openai_image_input_limit():
+  """Default request cap allows full-duration frame sampling."""
+  service = OpenAIAPIService(client=mock.Mock())
+
+  assert service.max_frame_count == 1500
+
+
 def test_build_input_rejects_total_image_bytes_over_cap(tmp_path, monkeypatch):
   """Total image evidence size is capped before request construction."""
   frame_path = tmp_path / "frame.jpg"

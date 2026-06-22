@@ -103,8 +103,8 @@ def test_openai_video_evaluation_maps_detector_dicts(monkeypatch):
   assert detector_instances[0].calls[0][1] is preprocess_result
 
 
-def test_openai_video_evaluation_uses_configured_frame_limit(monkeypatch):
-  """OpenAI evaluation service honors the CLI max_frames setting."""
+def test_openai_video_evaluation_uses_default_request_frame_limit(monkeypatch):
+  """OpenAI request validation is not capped by first-5 frame settings."""
   from evaluation_services import video_evaluation_service
   from llms_evaluation import openai_api_service
   from llms_evaluation import openai_detector
@@ -136,7 +136,7 @@ def test_openai_video_evaluation_uses_configured_frame_limit(monkeypatch):
       preprocess_result=_preprocess_result(),
   )
 
-  assert service_kwargs == [{"max_frame_count": 100}]
+  assert service_kwargs == [{}]
 
 
 def test_openai_video_evaluation_filters_configured_features(monkeypatch):

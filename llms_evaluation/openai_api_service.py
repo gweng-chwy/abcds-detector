@@ -13,7 +13,7 @@ from openai import OpenAI
 import models
 
 
-DEFAULT_MAX_FRAME_COUNT = 24
+DEFAULT_MAX_FRAME_COUNT = 1500
 DEFAULT_MAX_TOTAL_IMAGE_BYTES = 20 * 1024 * 1024
 ALLOWED_IMAGE_MIME_TYPES = frozenset({
     "image/jpeg",

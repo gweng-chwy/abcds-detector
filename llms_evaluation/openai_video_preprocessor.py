@@ -11,7 +11,7 @@ import models
 
 _SUBPROCESS_TIMEOUT_SECONDS = 300
 _MANIFEST_SCHEMA_VERSION = 1
-_EXTRACTION_STRATEGY_VERSION = "openai-evidence-v1"
+_EXTRACTION_STRATEGY_VERSION = "openai-evidence-v2"
 _MANIFEST_FILENAME = "preprocess_manifest.json"
 
 
@@ -416,31 +416,39 @@ class VideoPreprocessor:
     return float(completed.stdout.strip())
 
   def _full_video_timestamps(self, duration_seconds: float) -> list[float]:
-    """Return evenly spaced frame timestamps across the full video."""
-    if duration_seconds <= 0 or self.max_frames <= 1:
-      return [0.0]
-    step = duration_seconds / (self.max_frames - 1)
-    return [round(step * index, 2) for index in range(self.max_frames)]
+    """Return sampled frame timestamps across the full video."""
+    return self._sampled_timestamps(duration_seconds)
 
   def _first_5s_timestamps(self, duration_seconds: float) -> list[float]:
     """Return sampled frame timestamps within the first five seconds."""
-    if duration_seconds <= 0 or self.max_frames <= 1:
+    if self.max_frames <= 1:
       return [0.0]
     end_seconds = min(duration_seconds, 5.0)
-    if self.frame_sample_rate <= 0:
-      return [0.0, round(end_seconds, 2)][:self.max_frames]
+    return self._sampled_timestamps(end_seconds, max_count=self.max_frames)
 
-    step = 1 / self.frame_sample_rate
-    timestamps = []
-    timestamp = 0.0
-    while timestamp < end_seconds:
-      timestamps.append(round(timestamp, 2))
-      timestamp += step
-    if not timestamps or timestamps[-1] != round(end_seconds, 2):
-      timestamps.append(round(end_seconds, 2))
-    if len(timestamps) <= self.max_frames:
+  def _sampled_timestamps(
+      self,
+      end_seconds: float,
+      max_count: int | None = None,
+  ) -> list[float]:
+    """Return sample-rate timestamps from zero through end_seconds."""
+    if end_seconds <= 0:
+      return [0.0]
+    if self.frame_sample_rate <= 0:
+      timestamps = [0.0, round(end_seconds, 2)]
+    else:
+      step = 1 / self.frame_sample_rate
+      timestamps = []
+      timestamp = 0.0
+      while timestamp < end_seconds:
+        timestamps.append(round(timestamp, 2))
+        timestamp += step
+      if not timestamps or timestamps[-1] != round(end_seconds, 2):
+        timestamps.append(round(end_seconds, 2))
+
+    if max_count is None or len(timestamps) <= max_count:
       return timestamps
-    return timestamps[: self.max_frames - 1] + [round(end_seconds, 2)]
+    return timestamps[: max_count - 1] + [round(end_seconds, 2)]
 
   def _extract_frames_at_timestamps(
       self,
