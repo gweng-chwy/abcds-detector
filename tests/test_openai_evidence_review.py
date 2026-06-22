@@ -58,7 +58,7 @@ def test_openai_evidence_review_notebook_references_helper_workflow():
   assert "transcript_snippet" in source
   assert ".cache/abcds-detector" in source
   assert "load_preprocess_manifest" in source
-  assert "select_review_frame" in source
+  assert "frame_entries_from_manifest" in source
 
 
 def test_render_font_fallbacks_follow_design_order():
@@ -106,6 +106,27 @@ def test_discover_sample_videos_groups_platform_dirs_deterministically(tmp_path)
   assert {path.name for path in first["youtube"]}.issubset(
       {"a.mov", "b.mp4", "c.m4v"}
   )
+
+
+def test_discover_sample_videos_finds_nested_platform_video_dirs(tmp_path):
+  """Video discovery supports repo sample layout under platform/videos."""
+  google_videos = tmp_path / "google" / "videos"
+  tiktok_videos = tmp_path / "tiktok" / "videos"
+  google_videos.mkdir(parents=True)
+  tiktok_videos.mkdir(parents=True)
+  for filename in ["g1.mp4", "g2.mov", "g3.m4v"]:
+    (google_videos / filename).write_text("video", encoding="utf-8")
+  for filename in ["t1.mp4", "t2.mp4"]:
+    (tiktok_videos / filename).write_text("video", encoding="utf-8")
+
+  helper = _load_evidence_review()
+
+  selected = helper.discover_sample_videos(tmp_path, per_platform=2, seed=13)
+
+  assert set(selected) == {"google", "tiktok"}
+  assert all(len(videos) == 2 for videos in selected.values())
+  assert all(path.parent.name == "videos" for path in selected["google"])
+  assert all(path.parent.name == "videos" for path in selected["tiktok"])
 
 
 def test_discover_sample_videos_returns_empty_for_missing_or_file_path(tmp_path):
@@ -260,6 +281,7 @@ def test_load_feature_rows_flattens_assessment_feature_lists(tmp_path):
                           "id": "a_supers",
                           "name": "Supers",
                           "detected": True,
+                          "evidence": "Visible at 0.0s and 4.5s.",
                       }
                   ],
                   "shorts_evaluated_features": [
@@ -268,6 +290,7 @@ def test_load_feature_rows_flattens_assessment_feature_lists(tmp_path):
                           "id": "shorts_pacing",
                           "name": "Fast pacing",
                           "detected": False,
+                          "evidence": "",
                       }
                   ],
               },
@@ -280,6 +303,7 @@ def test_load_feature_rows_flattens_assessment_feature_lists(tmp_path):
                           "id": "shorts_hook",
                           "name": "Opening hook",
                           "detected": True,
+                          "evidence": "Hook appears around 00:02.",
                       }
                   ],
               },
@@ -293,28 +317,113 @@ def test_load_feature_rows_flattens_assessment_feature_lists(tmp_path):
 
   assert rows == {
       "sample_videos/ad-1.mp4": [
-          ("LONG_FORM_ABCD", "a_supers", "Supers", True),
-          ("SHORTS", "shorts_pacing", "Fast pacing", False),
+          ("LONG_FORM_ABCD", "a_supers", "Supers", True, "Visible at 0.0s and 4.5s."),
+          ("SHORTS", "shorts_pacing", "Fast pacing", False, ""),
       ],
       "sample_videos/ad-2.mp4": [
-          ("SHORTS", "shorts_hook", "Opening hook", True),
+          ("SHORTS", "shorts_hook", "Opening hook", True, "Hook appears around 00:02."),
       ],
   }
 
 
+def test_frame_entries_from_manifest_uses_full_video_timeline():
+  """Figure thumbnails use full-video frame evidence with timestamp labels."""
+  helper = _load_evidence_review()
+  manifest = {
+      "full_video_frame_evidence": [
+          {"path": ".cache/full/frame_0001.jpg", "timestamp_seconds": 0.0},
+          {"path": ".cache/full/frame_0002.jpg", "timestamp_seconds": 2.25},
+      ],
+      "first_5_seconds_frame_evidence": [
+          {"path": ".cache/first/frame_0001.jpg", "timestamp_seconds": 0.0},
+      ],
+  }
+
+  entries = helper.frame_entries_from_manifest(manifest)
+
+  assert entries == [
+      {
+          "index": "F01",
+          "label": "F01 0.0s",
+          "path": Path(".cache/full/frame_0001.jpg"),
+          "timestamp_seconds": 0.0,
+      },
+      {
+          "index": "F02",
+          "label": "F02 2.2s",
+          "path": Path(".cache/full/frame_0002.jpg"),
+          "timestamp_seconds": 2.25,
+      },
+  ]
+
+
+def test_feature_frame_references_map_timestamps_to_nearest_frame():
+  """Feature checklist can cite nearest thumbnail indexes from evidence text."""
+  helper = _load_evidence_review()
+  frame_entries = [
+      {"index": "F01", "timestamp_seconds": 0.0},
+      {"index": "F02", "timestamp_seconds": 2.0},
+      {"index": "F03", "timestamp_seconds": 5.0},
+  ]
+  rows = [
+      ("LONG_FORM_ABCD", "a_supers", "Supers", True, "Seen at 0.0s and 4.7s."),
+      ("SHORTS", "shorts_hook", "Hook", False, "Not present at 00:02."),
+  ]
+
+  checklist = helper.format_feature_checklist(rows, frame_entries, columns=1)
+
+  assert "[x] Supers\n    F01,F03" in checklist
+  assert "[ ] Hook\n    --" in checklist
+
+
+def test_dense_layout_uses_larger_thumbnail_and_checklist_grid():
+  """Dense figures reserve more space for readable thumbnails and features."""
+  helper = _load_evidence_review()
+
+  assert helper.ATTRIBUTION_HEADING == "ATTRIBUTION CHECKLIST"
+  assert helper.THUMBNAIL_GRID_SPACING == 0.0
+  assert helper.FIGURE_WIDTH_RATIOS == (1.05, 0.95)
+  assert helper._thumbnail_grid_shape(24) == (5, 5)
+  assert helper._checklist_column_count([None] * 46) == 2
+  assert helper._checklist_font_size([None] * 46) >= 7.5
+
+
+def test_compact_title_uses_sample_video_relative_path():
+  """Figure titles stay compact for absolute sample video paths."""
+  helper = _load_evidence_review()
+
+  assert helper._compact_title(
+      "/Users/gweng/Workspace/abcds-detector/sample_videos/google/videos/ad.mp4"
+  ) == "sample_videos/google/videos/ad.mp4"
+
+
 def test_render_evidence_figure_writes_non_empty_png(tmp_path):
   """Evidence figure rendering produces a PNG artifact for notebook review."""
-  frame_path = tmp_path / "frame.png"
-  Image.new("RGB", (32, 18), "white").save(frame_path)
+  frame_entries = []
+  for index in range(1, 25):
+    frame_path = tmp_path / f"frame_{index:04d}.png"
+    Image.new("RGB", (64, 36), "white").save(frame_path)
+    frame_entries.append({
+        "index": f"F{index:02d}",
+        "label": f"F{index:02d} {index - 1}.0s",
+        "path": frame_path,
+        "timestamp_seconds": float(index - 1),
+    })
   output_path = tmp_path / "evidence.png"
   helper = _load_evidence_review()
 
   rendered_path = helper.render_evidence_figure(
-      frame_path=frame_path,
+      frame_entries=frame_entries,
       transcript_text="Product appears in the opening shot.",
       feature_rows=[
-          ("LONG_FORM_ABCD", "a_supers", "Supers", True),
-          ("SHORTS", "shorts_hook", "Opening hook", False),
+          (
+              "LONG_FORM_ABCD",
+              f"feature_{index:02d}",
+              f"Feature {index:02d}",
+              index % 3 == 0,
+              f"Evidence at {index % 6}.0s.",
+          )
+          for index in range(46)
       ],
       output_path=output_path,
       title="sample_videos/ad.mp4",
@@ -324,7 +433,7 @@ def test_render_evidence_figure_writes_non_empty_png(tmp_path):
   assert output_path.exists()
   assert output_path.stat().st_size > 0
   with Image.open(output_path) as output_image:
-    assert output_image.size == (2000, 1125)
+    assert output_image.size == (2400, 1350)
 
   import matplotlib.pyplot as plt
 

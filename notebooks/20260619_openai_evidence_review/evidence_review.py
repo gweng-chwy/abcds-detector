@@ -4,9 +4,11 @@
 
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import random
+import re
 import subprocess
 import sys
 import textwrap
@@ -22,6 +24,12 @@ DEFAULT_METADATA = {
     "branded_products_categories": "Unknown Category",
     "branded_call_to_actions": "Unknown CTA",
 }
+
+FIGURE_SIZE = (13.333333333333334, 7.5)
+FIGURE_DPI = 180
+ATTRIBUTION_HEADING = "ATTRIBUTION CHECKLIST"
+FIGURE_WIDTH_RATIOS = (1.05, 0.95)
+THUMBNAIL_GRID_SPACING = 0.0
 
 SANS_FONT_FALLBACKS = [
     "figmaSans",
@@ -41,6 +49,11 @@ MONO_FONT_FALLBACKS = [
     "DejaVu Sans Mono",
 ]
 
+_TIMESTAMP_PATTERN = re.compile(
+    r"(?<![\d:])(?P<minutes>\d{1,2}):(?P<seconds>\d{2}(?:\.\d+)?)"
+    r"|(?<![\d:])~?(?P<plain_seconds>\d+(?:\.\d+)?)\s*s\b"
+)
+
 
 def discover_sample_videos(
     sample_root: str | Path,
@@ -56,11 +69,17 @@ def discover_sample_videos(
   grouped_videos = {}
 
   for platform_dir in sorted(path for path in sample_root.iterdir() if path.is_dir()):
-    videos = sorted(
+    candidate_dirs = [platform_dir]
+    nested_video_dir = platform_dir / "videos"
+    if nested_video_dir.is_dir():
+      candidate_dirs.append(nested_video_dir)
+
+    videos = sorted({
         path
-        for path in platform_dir.iterdir()
+        for candidate_dir in candidate_dirs
+        for path in candidate_dir.iterdir()
         if path.is_file() and path.suffix.lower() in VIDEO_EXTENSIONS
-    )
+    })
     if len(videos) > per_platform:
       videos = sorted(rng.sample(videos, per_platform))
     grouped_videos[platform_dir.name] = videos
@@ -208,6 +227,28 @@ def transcript_snippet(
   return transcript or "No transcript available."
 
 
+def frame_entries_from_manifest(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+  """Return full-video frame entries labeled by sampled timestamp."""
+  evidence = manifest.get("full_video_frame_evidence") or []
+  if not evidence:
+    evidence = manifest.get("first_5_seconds_frame_evidence") or []
+
+  frame_entries = []
+  for index, frame in enumerate(evidence, start=1):
+    frame_path = str(frame.get("path", "")).strip()
+    if not frame_path:
+      continue
+    timestamp_seconds = float(frame.get("timestamp_seconds", 0.0))
+    frame_index = f"F{index:02d}"
+    frame_entries.append({
+        "index": frame_index,
+        "label": f"{frame_index} {timestamp_seconds:.1f}s",
+        "path": Path(frame_path),
+        "timestamp_seconds": timestamp_seconds,
+    })
+  return frame_entries
+
+
 def load_feature_rows(assessment_path: str | Path) -> dict[str, list[tuple]]:
   """Flatten evaluated features into rows keyed by video URI."""
   data = load_json(assessment_path)
@@ -228,11 +269,17 @@ def load_feature_rows(assessment_path: str | Path) -> dict[str, list[tuple]]:
     ):
       for feature_result in assessment.get(key, []) or []:
         feature = feature_result.get("feature", feature_result)
+        evidence_text = " ".join(
+            str(feature_result.get(field_name, "")).strip()
+            for field_name in ("evidence", "rationale")
+            if str(feature_result.get(field_name, "")).strip()
+        )
         rows.append((
             feature.get("category", feature_result.get("category", "")),
             feature.get("id", feature_result.get("id", "")),
             feature.get("name", feature_result.get("name", "")),
             bool(feature_result.get("detected", False)),
+            evidence_text,
         ))
     feature_rows[video_uri] = rows
 
@@ -240,7 +287,7 @@ def load_feature_rows(assessment_path: str | Path) -> dict[str, list[tuple]]:
 
 
 def render_evidence_figure(
-    frame_path: str | Path,
+    frame_entries: list[dict[str, Any]],
     transcript_text: str,
     feature_rows: list[tuple],
     output_path: str | Path,
@@ -269,31 +316,66 @@ def render_evidence_figure(
       "axes.edgecolor": "black",
   })
 
-  fig = Figure(figsize=(13.333333333333334, 7.5), dpi=150, facecolor="white")
+  fig = Figure(figsize=FIGURE_SIZE, dpi=FIGURE_DPI, facecolor="white")
   FigureCanvasAgg(fig)
   grid = fig.add_gridspec(
       2,
       2,
-      width_ratios=[1.15, 0.85],
-      height_ratios=[0.74, 0.26],
-      wspace=0.08,
-      hspace=0.08,
-      top=0.88,
+      width_ratios=FIGURE_WIDTH_RATIOS,
+      height_ratios=[0.84, 0.16],
+      left=0.04,
+      right=0.985,
+      bottom=0.055,
+      top=0.91,
+      wspace=0.045,
+      hspace=0.075,
   )
 
-  image_axis = fig.add_subplot(grid[0, 0])
   transcript_axis = fig.add_subplot(grid[1, 0])
   checklist_axis = fig.add_subplot(grid[:, 1])
+  thumbnail_grid = grid[0, 0].subgridspec(
+      *_thumbnail_grid_shape(len(frame_entries)),
+      wspace=THUMBNAIL_GRID_SPACING,
+      hspace=THUMBNAIL_GRID_SPACING,
+  )
 
-  image_axis.imshow(mpimg.imread(frame_path))
-  image_axis.set_axis_off()
+  for axis_index, frame_entry in enumerate(frame_entries):
+    row_count, column_count = _thumbnail_grid_shape(len(frame_entries))
+    thumbnail_axis = fig.add_subplot(
+        thumbnail_grid[axis_index // column_count, axis_index % column_count]
+    )
+    thumbnail_axis.imshow(mpimg.imread(frame_entry["path"]))
+    thumbnail_axis.text(
+        0.03,
+        0.93,
+        frame_entry["label"],
+        transform=thumbnail_axis.transAxes,
+        ha="left",
+        va="top",
+        fontsize=7.5,
+        fontfamily="monospace",
+        bbox={
+            "boxstyle": "square,pad=0.12",
+            "facecolor": "white",
+            "edgecolor": "none",
+            "alpha": 0.82,
+        },
+    )
+    thumbnail_axis.set_axis_off()
+  for empty_index in range(len(frame_entries), math.prod(_thumbnail_grid_shape(len(frame_entries)))):
+    row_count, column_count = _thumbnail_grid_shape(len(frame_entries))
+    empty_axis = fig.add_subplot(
+        thumbnail_grid[empty_index // column_count, empty_index % column_count]
+    )
+    empty_axis.set_axis_off()
+
   fig.text(
       0.06,
       0.94,
-      title,
+      _compact_title(title),
       ha="left",
       va="top",
-      fontsize=20,
+      fontsize=12,
       color="black",
   )
 
@@ -311,40 +393,72 @@ def render_evidence_figure(
   transcript_axis.text(
       0.0,
       0.72,
-      "\n".join(textwrap.wrap(transcript_text, width=54)),
+      "\n".join(textwrap.wrap(transcript_text, width=78))[:1200],
       transform=transcript_axis.transAxes,
       ha="left",
       va="top",
-      fontsize=17,
-      linespacing=1.25,
+      fontsize=10,
+      linespacing=1.12,
   )
 
   _configure_text_axis(checklist_axis)
   checklist_axis.text(
       0.0,
       0.98,
-      "FEATURE CHECKLIST",
+      ATTRIBUTION_HEADING,
       transform=checklist_axis.transAxes,
       ha="left",
       va="top",
-      fontsize=9,
+      fontsize=10,
       fontfamily="monospace",
   )
-  checklist_text = _format_feature_checklist(feature_rows)
-  checklist_axis.text(
-      0.0,
-      0.92,
-      checklist_text,
-      transform=checklist_axis.transAxes,
-      ha="left",
-      va="top",
-      fontsize=_checklist_font_size(feature_rows),
-      linespacing=1.18,
+  checklist_columns = _feature_checklist_columns(
+      feature_rows,
+      frame_entries,
+      columns=_checklist_column_count(feature_rows),
   )
+  checklist_font_size = _checklist_font_size(feature_rows)
+  for column_index, lines in enumerate(checklist_columns):
+    checklist_axis.text(
+        column_index / len(checklist_columns),
+        0.92,
+        "\n".join(lines),
+        transform=checklist_axis.transAxes,
+        ha="left",
+        va="top",
+        fontsize=checklist_font_size,
+        fontfamily="monospace",
+        linespacing=1.02,
+      )
 
-  fig.savefig(output_path, dpi=150, facecolor="white")
+  fig.savefig(output_path, dpi=FIGURE_DPI, facecolor="white")
   fig.clear()
   return output_path
+
+
+def format_feature_checklist(
+    feature_rows: list[tuple],
+    frame_entries: list[dict[str, Any]],
+    columns: int = 2,
+) -> str:
+  """Return a compact feature checklist with nearest frame indexes."""
+  checklist_columns = _feature_checklist_columns(
+      feature_rows,
+      frame_entries,
+      columns=columns,
+  )
+  if not checklist_columns:
+    return "No evaluated features found."
+  row_count = max(len(column) for column in checklist_columns)
+  output_lines = []
+  for row_index in range(row_count):
+    output_lines.append(
+        "   ".join(
+            column[row_index] if row_index < len(column) else ""
+            for column in checklist_columns
+        ).rstrip()
+    )
+  return "\n".join(output_lines)
 
 
 def _flatten_selected_videos(
@@ -382,22 +496,108 @@ def _configure_text_axis(axis) -> None:
   axis.set_axis_off()
 
 
-def _format_feature_checklist(feature_rows: list[tuple]) -> str:
-  lines = []
-  for category, feature_id, name, detected in feature_rows:
+def _thumbnail_grid_shape(frame_count: int) -> tuple[int, int]:
+  if frame_count <= 0:
+    return (1, 1)
+  if frame_count <= 6:
+    columns = 3
+  elif frame_count <= 12:
+    columns = 4
+  elif frame_count <= 25:
+    columns = 5
+  else:
+    columns = 6
+  return (math.ceil(frame_count / columns), columns)
+
+
+def _feature_checklist_columns(
+    feature_rows: list[tuple],
+    frame_entries: list[dict[str, Any]],
+    columns: int,
+) -> list[list[str]]:
+  if not feature_rows:
+    return [["No evaluated features found."]]
+
+  checklist_lines = []
+  for row in feature_rows:
+    category, feature_id, name, detected = row[:4]
+    evidence_text = row[4] if len(row) > 4 else ""
     mark = "[x]" if detected else "[ ]"
-    label = name or feature_id
-    category_text = str(category).replace("_", " ")
-    line = f"{mark} {label}"
-    if category_text:
-      line = f"{line}\n    {category_text}"
-    lines.append(line)
-  return "\n\n".join(lines) if lines else "No evaluated features found."
+    refs = _frame_refs_for_feature(bool(detected), str(evidence_text), frame_entries)
+    label = _shorten_feature_label(str(name or feature_id))
+    checklist_lines.append(f"{mark} {label}\n    {refs}")
+
+  columns = max(1, min(columns, len(checklist_lines)))
+  rows_per_column = math.ceil(len(checklist_lines) / columns)
+  return [
+      checklist_lines[index : index + rows_per_column]
+      for index in range(0, len(checklist_lines), rows_per_column)
+  ]
+
+
+def _frame_refs_for_feature(
+    detected: bool,
+    evidence_text: str,
+    frame_entries: list[dict[str, Any]],
+    max_refs: int = 3,
+) -> str:
+  if not detected or not evidence_text or not frame_entries:
+    return "--"
+
+  refs = []
+  for timestamp in _timestamps_from_text(evidence_text):
+    nearest_frame = min(
+        frame_entries,
+        key=lambda frame_entry: abs(
+            float(frame_entry["timestamp_seconds"]) - timestamp
+        ),
+    )
+    frame_index = str(nearest_frame["index"])
+    if frame_index not in refs:
+      refs.append(frame_index)
+    if len(refs) >= max_refs:
+      break
+  return ",".join(refs) if refs else "--"
+
+
+def _timestamps_from_text(text: str) -> list[float]:
+  timestamps = []
+  for match in _TIMESTAMP_PATTERN.finditer(text):
+    if match.group("plain_seconds") is not None:
+      timestamps.append(float(match.group("plain_seconds")))
+      continue
+    minutes = float(match.group("minutes") or 0)
+    seconds = float(match.group("seconds") or 0)
+    timestamps.append(minutes * 60 + seconds)
+  return timestamps
+
+
+def _shorten_feature_label(label: str, max_chars: int = 22) -> str:
+  label = " ".join(label.split())
+  if len(label) <= max_chars:
+    return label
+  return label[: max_chars - 1].rstrip() + "."
+
+
+def _compact_title(title: str) -> str:
+  parts = Path(title).parts
+  if "sample_videos" in parts:
+    start = parts.index("sample_videos")
+    return "/".join(parts[start:])
+  return title
+
+
+def _checklist_column_count(feature_rows: list[tuple]) -> int:
+  if len(feature_rows) <= 24:
+    return 1
+  if len(feature_rows) <= 54:
+    return 2
+  return 3
 
 
 def _checklist_font_size(feature_rows: list[tuple]) -> int:
-  if len(feature_rows) <= 8:
-    return 15
-  if len(feature_rows) <= 14:
-    return 12
-  return 10
+  if len(feature_rows) <= 24:
+    return 8.6
+  if len(feature_rows) <= 54:
+    return 7.8
+  return 6.2
