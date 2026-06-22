@@ -13,6 +13,7 @@ _SUBPROCESS_TIMEOUT_SECONDS = 300
 _MANIFEST_SCHEMA_VERSION = 1
 _EXTRACTION_STRATEGY_VERSION = "openai-evidence-v2"
 _MANIFEST_FILENAME = "preprocess_manifest.json"
+_FRAME_RETRY_OFFSETS_SECONDS = (0.0, 0.05, 0.25, 0.5, 1.0)
 
 
 def build_cache_key(uri: str) -> str:
@@ -459,40 +460,44 @@ class VideoPreprocessor:
     evidence = []
     for index, timestamp in enumerate(timestamps, start=1):
       output_path = output_dir / f"frame_{index:04d}.jpg"
-      try:
-        self._run([
+      last_error = None
+      for seek_timestamp in self._frame_seek_candidates(timestamp):
+        try:
+          self._run([
             "ffmpeg",
             "-y",
             "-ss",
-            f"{timestamp:.2f}",
+            f"{seek_timestamp:.2f}",
             "-i",
             video_path,
             "-frames:v",
             "1",
             str(output_path),
-        ])
-      except RuntimeError:
-        if timestamp <= 0:
-          raise
-      if not output_path.exists() and timestamp > 0:
-        retry_timestamp = max(0.0, timestamp - 0.05)
-        self._run([
-            "ffmpeg",
-            "-y",
-            "-ss",
-            f"{retry_timestamp:.2f}",
-            "-i",
-            video_path,
-            "-frames:v",
-            "1",
-            str(output_path),
-        ])
+          ])
+        except RuntimeError as exc:
+          last_error = exc
+          if timestamp <= 0 and seek_timestamp <= 0:
+            raise
+          continue
+        if output_path.exists():
+          break
+      if not output_path.exists() and timestamp <= 0 and last_error:
+        raise last_error
       if output_path.exists():
         evidence.append(models.VideoFrameEvidence(
             path=str(output_path),
             timestamp_seconds=timestamp,
         ))
     return evidence
+
+  def _frame_seek_candidates(self, timestamp: float) -> list[float]:
+    """Return bounded fallback seek timestamps for near-EOF extraction."""
+    candidates = []
+    for offset_seconds in _FRAME_RETRY_OFFSETS_SECONDS:
+      seek_timestamp = max(0.0, timestamp - offset_seconds)
+      if seek_timestamp not in candidates:
+        candidates.append(seek_timestamp)
+    return candidates
 
   def _extract_first_5s_audio(self, video_path: str, audio_path: Path) -> None:
     self._run([

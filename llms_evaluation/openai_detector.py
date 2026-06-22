@@ -22,6 +22,7 @@ _CALL_TO_ACTIONS = [
     "VISIT SITE",
     "WATCH NOW",
 ]
+_MAX_FEATURE_EVALUATION_ATTEMPTS = 2
 
 _SYSTEM_INSTRUCTIONS = """
 You are an AI Video Analysis Engine. Your primary function is to act as a
@@ -84,17 +85,27 @@ class OpenAIDetector:
         preprocess_result,
         feature_configs,
     )
-    response = self.openai_service.evaluate_features(
-        prompt_config=prompt_config,
-        preprocess_result=preprocess_result,
-        model_name=config.openai_model,
-        schema=models.OPENAI_VIDEO_RESPONSE_SCHEMA,
-        frame_paths=evidence_pack["frame_paths"],
-        transcript=evidence_pack["transcript"],
-        transcript_available=evidence_pack["transcript_available"],
-        frame_evidence=evidence_pack["frame_evidence"],
-    )
-    return response.get("features", [])
+    validation_error = None
+    for _ in range(_MAX_FEATURE_EVALUATION_ATTEMPTS):
+      response = self.openai_service.evaluate_features(
+          prompt_config=prompt_config,
+          preprocess_result=preprocess_result,
+          model_name=config.openai_model,
+          schema=models.OPENAI_VIDEO_RESPONSE_SCHEMA,
+          frame_paths=evidence_pack["frame_paths"],
+          transcript=evidence_pack["transcript"],
+          transcript_available=evidence_pack["transcript_available"],
+          frame_evidence=evidence_pack["frame_evidence"],
+      )
+      try:
+        return self._validate_feature_response(
+            response.get("features", []),
+            feature_configs,
+        )
+      except ValueError as exc:
+        validation_error = exc
+
+    raise validation_error
 
   def _select_evidence_pack(
       self,
@@ -176,6 +187,57 @@ class OpenAIDetector:
         )
         .replace("{metadata_summary}", video_metadata)
     )
+
+  def _validate_feature_response(
+      self,
+      response_features,
+      feature_configs: list[models.VideoFeature],
+  ) -> list[dict]:
+    """Require exactly one OpenAI result per requested feature ID."""
+    if not isinstance(response_features, list):
+      raise ValueError("OpenAI response features must be a list")
+
+    expected_ids = [feature.id for feature in feature_configs]
+    expected_id_set = set(expected_ids)
+    features_by_id = {}
+    duplicate_ids = []
+    unexpected_ids = []
+
+    for response_feature in response_features:
+      if not isinstance(response_feature, dict):
+        raise ValueError("OpenAI response feature items must be objects")
+      feature_id = response_feature.get("id")
+      if feature_id not in expected_id_set:
+        unexpected_ids.append(feature_id)
+        continue
+      if feature_id in features_by_id:
+        duplicate_ids.append(feature_id)
+        continue
+      features_by_id[feature_id] = response_feature
+
+    missing_ids = [
+        feature_id for feature_id in expected_ids if feature_id not in features_by_id
+    ]
+    if missing_ids or unexpected_ids or duplicate_ids:
+      details = []
+      if missing_ids:
+        details.append(f"missing feature ids: {', '.join(missing_ids)}")
+      if unexpected_ids:
+        details.append(
+            "unexpected feature ids: "
+            + ", ".join(str(feature_id) for feature_id in unexpected_ids)
+        )
+      if duplicate_ids:
+        details.append(
+            "duplicate feature ids: "
+            + ", ".join(str(feature_id) for feature_id in duplicate_ids)
+        )
+      raise ValueError(
+          "OpenAI response did not match requested features; "
+          + "; ".join(details)
+      )
+
+    return [features_by_id[feature_id] for feature_id in expected_ids]
 
   def _augment_instructions(
       self,

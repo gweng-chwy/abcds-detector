@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass, field
 
+import pytest
+
 import models
 from llms_evaluation.openai_detector import OpenAIDetector
 
@@ -51,6 +53,19 @@ class OpenAIServiceStub:
     return self.response
 
 
+class OpenAISequenceServiceStub(OpenAIServiceStub):
+  """Returns configured API outputs in sequence."""
+
+  def __init__(self, responses):
+    super().__init__(responses[0])
+    self.responses = list(responses)
+
+  def evaluate_features(self, *args, **kwargs):
+    response = self.responses[min(len(self.calls), len(self.responses) - 1)]
+    super().evaluate_features(*args, **kwargs)
+    return response
+
+
 def _preprocess_result():
   return models.VideoPreprocessResult(
       source=models.VideoSource("ad.mp4", "ad.mp4", "LOCAL"),
@@ -90,6 +105,14 @@ def _feature(feature_id, video_segment):
   )
 
 
+def _response_for_feature_ids(*feature_ids):
+  return {
+      "features": [
+          {"id": feature_id, "detected": False} for feature_id in feature_ids
+      ]
+  }
+
+
 def test_detector_returns_features_from_openai_response():
   """Detector unwraps the features list returned by the OpenAI service."""
   expected_features = [{
@@ -110,22 +133,46 @@ def test_detector_returns_features_from_openai_response():
   assert "Feature ID: a_supers" in service.calls[0]["prompt_config"].prompt
 
 
-def test_detector_returns_empty_list_when_response_has_no_features():
-  """Missing feature results are treated as an empty evaluation result."""
-  service = OpenAIServiceStub({})
+def test_detector_retries_missing_feature_response_once():
+  """Incomplete OpenAI feature lists are retried before returning results."""
+  expected_features = [
+      {"id": "first", "detected": True},
+      {"id": "second", "detected": False},
+  ]
+  service = OpenAISequenceServiceStub([
+      {"features": [{"id": "first", "detected": True}]},
+      {"features": list(reversed(expected_features))},
+  ])
 
   result = OpenAIDetector(service).evaluate_features(
       config=ConfigStub(),
       preprocess_result=_preprocess_result(),
-      feature_configs=[_feature("a_supers", models.VideoSegment.FULL_VIDEO)],
+      feature_configs=[
+          _feature("first", models.VideoSegment.FULL_VIDEO),
+          _feature("second", models.VideoSegment.FULL_VIDEO),
+      ],
   )
 
-  assert result == []
+  assert result == expected_features
+  assert len(service.calls) == 2
+
+
+def test_detector_raises_when_response_has_no_features_after_retry():
+  """Missing feature results fail loudly instead of writing partial output."""
+  service = OpenAIServiceStub({})
+
+  with pytest.raises(ValueError, match="missing feature ids: a_supers"):
+    OpenAIDetector(service).evaluate_features(
+        config=ConfigStub(),
+        preprocess_result=_preprocess_result(),
+        feature_configs=[_feature("a_supers", models.VideoSegment.FULL_VIDEO)],
+    )
+  assert len(service.calls) == 2
 
 
 def test_detector_prompt_preserves_legacy_evaluation_directives():
   """OpenAI prompt keeps the core legacy ABCD evaluation instructions."""
-  service = OpenAIServiceStub({"features": []})
+  service = OpenAIServiceStub(_response_for_feature_ids("a_supers"))
 
   OpenAIDetector(service).evaluate_features(
       config=ConfigStub(),
@@ -146,7 +193,9 @@ def test_detector_prompt_preserves_legacy_evaluation_directives():
 
 def test_detector_selects_first_5s_frames_when_all_features_are_first_5s():
   """First-five-second feature groups evaluate only first-five-second frames."""
-  service = OpenAIServiceStub({"features": []})
+  service = OpenAIServiceStub(
+      _response_for_feature_ids("brand-early", "product-early")
+  )
   preprocess_result = _preprocess_result()
 
   OpenAIDetector(service).evaluate_features(
@@ -163,7 +212,9 @@ def test_detector_selects_first_5s_frames_when_all_features_are_first_5s():
 
 def test_detector_selects_first_5s_evidence_when_all_features_are_first_5s():
   """First-five-second feature groups use first-five-second evidence pack."""
-  service = OpenAIServiceStub({"features": []})
+  service = OpenAIServiceStub(
+      _response_for_feature_ids("brand-early", "product-early")
+  )
   preprocess_result = _preprocess_result()
 
   OpenAIDetector(service).evaluate_features(
@@ -184,7 +235,7 @@ def test_detector_selects_first_5s_evidence_when_all_features_are_first_5s():
 
 def test_detector_selects_explicit_unavailable_first_5s_transcript():
   """First-five-second availability remains false when transcript is absent."""
-  service = OpenAIServiceStub({"features": []})
+  service = OpenAIServiceStub(_response_for_feature_ids("brand-early"))
   preprocess_result = _preprocess_result()
   preprocess_result.first_5_seconds_transcript = ""
   preprocess_result.first_5_seconds_transcript_available = False
@@ -203,7 +254,7 @@ def test_detector_selects_explicit_unavailable_first_5s_transcript():
 
 def test_detector_selects_full_frames_when_any_feature_needs_full_video():
   """Mixed feature groups keep full-video frame evidence."""
-  service = OpenAIServiceStub({"features": []})
+  service = OpenAIServiceStub(_response_for_feature_ids("brand-early", "supers"))
   preprocess_result = _preprocess_result()
 
   OpenAIDetector(service).evaluate_features(
@@ -220,7 +271,7 @@ def test_detector_selects_full_frames_when_any_feature_needs_full_video():
 
 def test_detector_selects_full_evidence_when_any_feature_needs_full_video():
   """Mixed feature groups use full-video transcript and frame evidence."""
-  service = OpenAIServiceStub({"features": []})
+  service = OpenAIServiceStub(_response_for_feature_ids("brand-early", "supers"))
   preprocess_result = _preprocess_result()
 
   OpenAIDetector(service).evaluate_features(
@@ -242,7 +293,7 @@ def test_detector_selects_full_evidence_when_any_feature_needs_full_video():
 
 def test_detector_falls_back_to_legacy_transcript_for_full_video_evidence():
   """Full-video evidence falls back to the legacy transcript field."""
-  service = OpenAIServiceStub({"features": []})
+  service = OpenAIServiceStub(_response_for_feature_ids("supers"))
   preprocess_result = _preprocess_result()
   preprocess_result.full_video_transcript = ""
 

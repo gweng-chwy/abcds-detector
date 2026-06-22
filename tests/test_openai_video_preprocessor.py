@@ -222,6 +222,55 @@ def test_frame_extraction_retries_slightly_before_missing_endpoint(
   ]
 
 
+def test_frame_extraction_retries_multiple_earlier_offsets_at_endpoint(
+    tmp_path, monkeypatch
+):
+  """Near-EOF frame extraction backs up enough for short source videos."""
+  video_path = tmp_path / "video.mp4"
+  video_path.write_bytes(b"video")
+  output_dir = tmp_path / "frames"
+  output_dir.mkdir()
+  commands = []
+
+  def fake_run(cmd, check, capture_output, text, timeout):
+    assert check is True
+    assert capture_output is True
+    assert text is True
+    assert timeout == 300
+    commands.append(cmd)
+    seek_time = cmd[cmd.index("-ss") + 1]
+    if seek_time in {"6.01", "5.96"}:
+      raise preprocessor_module.subprocess.CalledProcessError(
+          returncode=234,
+          cmd=cmd,
+          stderr="No filtered frames for output stream",
+      )
+    if seek_time == "5.76":
+      Path(cmd[-1]).write_bytes(b"frame")
+    return SimpleNamespace(stdout="")
+
+  monkeypatch.setattr(preprocessor_module.subprocess, "run", fake_run)
+
+  evidence = VideoPreprocessor(
+      cache_dir=str(tmp_path / "cache"),
+      max_frames=24,
+      frame_sample_rate=1.0,
+      openai_service=object(),
+  )._extract_frames_at_timestamps(str(video_path), output_dir, [6.01])
+
+  assert [cmd[cmd.index("-ss") + 1] for cmd in commands] == [
+      "6.01",
+      "5.96",
+      "5.76",
+  ]
+  assert evidence == [
+      models.VideoFrameEvidence(
+          path=str(output_dir / "frame_0001.jpg"),
+          timestamp_seconds=6.01,
+      )
+  ]
+
+
 def test_frame_extraction_failure_at_zero_timestamp_still_raises(
     tmp_path, monkeypatch
 ):
