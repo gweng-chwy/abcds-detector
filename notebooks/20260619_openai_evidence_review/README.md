@@ -1,9 +1,10 @@
 # OpenAI Evidence Review Helpers
 
 This folder contains notebook-local helpers for reviewing OpenAI evidence
-extraction outputs. The helper renders a 16:9 PNG with the extracted frame and
-nearby transcript snippet on the left, and the evaluated ABCD/Shorts feature
-checklist on the right.
+extraction outputs. The helper renders a 16:9 PNG with full-video frame
+thumbnails and the full transcript on the left, and the evaluated ABCD/Shorts
+attribution checklist split into Long Form ABCD and Shorts columns with
+A/B/C/D/E sections on the right.
 
 ## Expected Inputs
 
@@ -35,7 +36,7 @@ visualization plumbing; it does not validate brand classification accuracy.
 
 ## Figure Output
 
-`render_evidence_figure` saves a monochrome Keynote-ratio PNG at 150 dpi. The
+`render_evidence_figure` saves a monochrome Keynote-ratio PNG at 180 dpi. The
 notebook uses `notebooks/20260619_openai_evidence_review/figures/` for Keynote
 handoff figures, and that generated directory is gitignored. For additional
 scratch output, use `outputs/openai_validation_sample/`.

@@ -55,7 +55,8 @@ def test_openai_evidence_review_notebook_references_helper_workflow():
   assert "render_evidence_figure" in source
   assert "outputs/openai_validation_sample" in source
   assert "load_feature_rows" in source
-  assert "transcript_snippet" in source
+  assert "full_transcript_text" in source
+  assert "transcript_snippet(manifest" not in source
   assert ".cache/abcds-detector" in source
   assert "load_preprocess_manifest" in source
   assert "frame_entries_from_manifest" in source
@@ -210,6 +211,45 @@ def test_transcript_snippet_reads_preprocessor_transcript_path(tmp_path):
   )
 
 
+def test_full_transcript_text_prefers_complete_preprocessor_transcript(tmp_path):
+  """Evidence figures use full-video transcript text rather than first-5s text."""
+  transcript_path = tmp_path / "transcript.txt"
+  first_5_path = tmp_path / "transcript_first_5s.txt"
+  transcript_path.write_text(
+      "Full transcript line one.\nFull transcript line two.",
+      encoding="utf-8",
+  )
+  first_5_path.write_text("Opening-only transcript.", encoding="utf-8")
+  helper = _load_evidence_review()
+
+  transcript = helper.full_transcript_text({
+      "transcript_path": str(transcript_path),
+      "first_5_seconds_transcript_path": str(first_5_path),
+      "transcript_segments": [
+          {"start": 0.0, "end": 1.0, "text": "Segment text."},
+      ],
+  })
+
+  assert transcript == "Full transcript line one.\nFull transcript line two."
+
+
+def test_full_transcript_text_falls_back_to_segments_before_first_5(tmp_path):
+  """Full transcript fallback can reconstruct text from available segments."""
+  first_5_path = tmp_path / "transcript_first_5s.txt"
+  first_5_path.write_text("Opening-only transcript.", encoding="utf-8")
+  helper = _load_evidence_review()
+
+  transcript = helper.full_transcript_text({
+      "first_5_seconds_transcript_path": str(first_5_path),
+      "transcript_segments": [
+          {"start": 0.0, "end": 1.0, "text": "Opening line."},
+          {"start": 5.0, "end": 7.0, "text": "Closing line."},
+      ],
+  })
+
+  assert transcript == "Opening line. Closing line."
+
+
 def test_load_preprocess_manifest_uses_preprocessor_cache_key(tmp_path):
   """Manifest loading follows the OpenAI preprocessor cache layout."""
   video_uri = "sample_videos/youtube/ad.mp4"
@@ -278,6 +318,7 @@ def test_load_feature_rows_flattens_assessment_feature_lists(tmp_path):
                   "long_form_abcd_evaluated_features": [
                       {
                           "category": "LONG_FORM_ABCD",
+                          "sub_category": "ATTRACT",
                           "id": "a_supers",
                           "name": "Supers",
                           "detected": True,
@@ -287,6 +328,7 @@ def test_load_feature_rows_flattens_assessment_feature_lists(tmp_path):
                   "shorts_evaluated_features": [
                       {
                           "category": "SHORTS",
+                          "sub_category": "ATTRACT",
                           "id": "shorts_pacing",
                           "name": "Fast pacing",
                           "detected": False,
@@ -300,6 +342,7 @@ def test_load_feature_rows_flattens_assessment_feature_lists(tmp_path):
                   "shorts_evaluated_features": [
                       {
                           "category": "SHORTS",
+                          "sub_category": "CONNECT",
                           "id": "shorts_hook",
                           "name": "Opening hook",
                           "detected": True,
@@ -317,11 +360,25 @@ def test_load_feature_rows_flattens_assessment_feature_lists(tmp_path):
 
   assert rows == {
       "sample_videos/ad-1.mp4": [
-          ("LONG_FORM_ABCD", "a_supers", "Supers", True, "Visible at 0.0s and 4.5s."),
-          ("SHORTS", "shorts_pacing", "Fast pacing", False, ""),
+          (
+              "LONG_FORM_ABCD",
+              "a_supers",
+              "Supers",
+              True,
+              "Visible at 0.0s and 4.5s.",
+              "ATTRACT",
+          ),
+          ("SHORTS", "shorts_pacing", "Fast pacing", False, "", "ATTRACT"),
       ],
       "sample_videos/ad-2.mp4": [
-          ("SHORTS", "shorts_hook", "Opening hook", True, "Hook appears around 00:02."),
+          (
+              "SHORTS",
+              "shorts_hook",
+              "Opening hook",
+              True,
+              "Hook appears around 00:02.",
+              "CONNECT",
+          ),
       ],
   }
 
@@ -376,6 +433,134 @@ def test_feature_frame_references_map_timestamps_to_nearest_frame():
   assert "[ ] Hook\n    --" in checklist
 
 
+def test_feature_checklist_groups_rows_by_abcde_subcategory():
+  """Attribution checklist groups features into A/B/C/D/E strategy sections."""
+  helper = _load_evidence_review()
+  frame_entries = [
+      {"index": "F01", "timestamp_seconds": 0.0},
+      {"index": "F02", "timestamp_seconds": 2.0},
+  ]
+  rows = [
+      ("SHORTS", "shorts_extra", "Production Style", True, "Seen at 2.0s.", "NONE"),
+      ("LONG_FORM_ABCD", "b_brand", "Brand Visuals", True, "Seen at 0.0s.", "BRAND"),
+      ("LONG_FORM_ABCD", "a_start", "Dynamic Start", False, "", "ATTRACT"),
+      ("LONG_FORM_ABCD", "d_cta", "Call To Action", True, "Seen at 2.0s.", "DIRECT"),
+      ("SHORTS", "c_context", "Product Context", False, "", "CONNECT"),
+  ]
+
+  checklist_columns = helper._feature_checklist_columns(
+      rows,
+      frame_entries,
+      columns=2,
+  )
+  long_form_column, shorts_column = checklist_columns
+
+  assert long_form_column.index("A / ATTRACT") < long_form_column.index("B / BRAND")
+  assert long_form_column.index("B / BRAND") < long_form_column.index("D / DIRECT")
+  assert shorts_column.index("C / CONNECT") < shorts_column.index("E / EXTRA")
+  assert "[x] Production Style\n    F02" in shorts_column
+
+
+def test_feature_checklist_splits_long_form_and_shorts_sections():
+  """Attribution checklist separates long-form and Shorts before ABCDE groups."""
+  helper = _load_evidence_review()
+  frame_entries = [{"index": "F01", "timestamp_seconds": 0.0}]
+  rows = [
+      ("SHORTS", "shorts_extra", "Production Style", True, "Seen at 0.0s.", "NONE"),
+      ("LONG_FORM_ABCD", "b_brand", "Brand Visuals", True, "Seen at 0.0s.", "BRAND"),
+      ("SHORTS", "shorts_hook", "Human Voice Presence", False, "", "ATTRACT"),
+      ("LONG_FORM_ABCD", "a_start", "Dynamic Start", False, "", "ATTRACT"),
+  ]
+
+  checklist_columns = helper._feature_checklist_columns(
+      rows,
+      frame_entries,
+      columns=2,
+  )
+
+  assert checklist_columns[0][:3] == [
+      "LONG FORM ABCD",
+      "A / ATTRACT",
+      "[ ] Dynamic Start\n    --",
+  ]
+  assert "B / BRAND" in checklist_columns[0]
+  assert "[x] Brand Visuals\n    F01" in checklist_columns[0]
+  assert checklist_columns[1][:3] == [
+      "SHORTS",
+      "A / ATTRACT",
+      "[ ] Human Voice Presence\n    --",
+  ]
+  assert "E / EXTRA" in checklist_columns[1]
+  assert "[x] Production Style\n    F01" in checklist_columns[1]
+
+
+def test_feature_checklist_infers_group_from_legacy_feature_ids():
+  """Checklist grouping remains compatible with older tuple rows."""
+  helper = _load_evidence_review()
+
+  checklist = helper.format_feature_checklist(
+      [
+          ("LONG_FORM_ABCD", "b_brand_visuals", "Brand Visuals", True, ""),
+          ("LONG_FORM_ABCD", "a_supers", "Supers", False, ""),
+          ("SHORTS", "shorts_native_style", "Production Style", True, ""),
+      ],
+      [],
+      columns=1,
+  )
+
+  assert checklist.index("A / ATTRACT") < checklist.index("B / BRAND")
+  assert "E / EXTRA" in checklist
+
+
+def test_attribution_group_headers_are_identifiable_for_bold_rendering():
+  """Figure renderer can bold group headers without bolding feature rows."""
+  helper = _load_evidence_review()
+
+  assert helper._is_attribution_group_header("A / ATTRACT")
+  assert helper._is_attribution_group_header("E / EXTRA")
+  assert not helper._is_attribution_group_header("[x] Brand Visuals")
+
+
+def test_feature_labels_compact_parenthetical_suffixes_without_breaking_them():
+  """Feature labels keep speech/text and first-5s variants distinguishable."""
+  helper = _load_evidence_review()
+
+  assert helper._shorten_feature_label("Brand Mention (Speech)") == (
+      "Brand Mention [Sp]"
+  )
+  assert helper._shorten_feature_label(
+      "Brand Mention (Speech) (First 5 seconds)"
+  ) == "Brand Mention [Sp 5s]"
+  assert helper._shorten_feature_label("Product Mention (Speech)") == (
+      "Product Mention [Sp]"
+  )
+  assert helper._shorten_feature_label(
+      "Product Mention (Speech) (First 5 seconds)"
+  ) == "Product Mention [Sp 5s]"
+  assert helper._shorten_feature_label("Product Mention (Text)") == (
+      "Product Mention [Txt]"
+  )
+  assert helper._shorten_feature_label(
+      "Product Mention (Text) (First 5 seconds)"
+  ) == "Product Mention [Txt 5s]"
+  assert helper._shorten_feature_label("Brand Visuals (First 5 seconds)") == (
+      "Brand Visuals [5s]"
+  )
+
+
+def test_feature_labels_do_not_leave_unclosed_parentheses():
+  """Truncated checklist labels avoid dangling parenthetical fragments."""
+  helper = _load_evidence_review()
+
+  for label in [
+      "Brand Mention (Speech) (First 5 seconds)",
+      "Product Mention (Speech) (First 5 seconds)",
+      "Product Mention (Text) (First 5 seconds)",
+  ]:
+    shortened = helper._shorten_feature_label(label)
+    assert shortened.count("(") == shortened.count(")")
+
+
 def test_dense_layout_uses_larger_thumbnail_and_checklist_grid():
   """Dense figures reserve more space for readable thumbnails and features."""
   helper = _load_evidence_review()
@@ -383,9 +568,31 @@ def test_dense_layout_uses_larger_thumbnail_and_checklist_grid():
   assert helper.ATTRIBUTION_HEADING == "ATTRIBUTION CHECKLIST"
   assert helper.THUMBNAIL_GRID_SPACING == 0.0
   assert helper.FIGURE_WIDTH_RATIOS == (1.05, 0.95)
+  assert helper.FIGURE_HEIGHT_RATIOS == (0.78, 0.22)
   assert helper._thumbnail_grid_shape(24) == (5, 5)
   assert helper._checklist_column_count([None] * 46) == 2
   assert helper._checklist_font_size([None] * 46) >= 7.5
+
+
+def test_transcript_block_uses_available_space_without_overflowing():
+  """Transcript layout keeps long full text inside a bounded figure block."""
+  helper = _load_evidence_review()
+  transcript = " ".join(f"word{index:03d}" for index in range(180))
+
+  block = helper.format_transcript_block(transcript)
+  lines = block.splitlines()
+
+  assert len(lines) <= helper.TRANSCRIPT_MAX_LINES
+  assert lines[-1].endswith("...")
+  assert all(len(line) <= helper.TRANSCRIPT_WRAP_WIDTH for line in lines)
+
+
+def test_transcript_block_preserves_short_full_transcript():
+  """Short transcripts render without unnecessary truncation."""
+  helper = _load_evidence_review()
+  transcript = "A concise full transcript that fits on one line."
+
+  assert helper.format_transcript_block(transcript) == transcript
 
 
 def test_compact_title_uses_sample_video_relative_path():

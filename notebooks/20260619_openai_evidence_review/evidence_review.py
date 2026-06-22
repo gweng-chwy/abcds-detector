@@ -29,7 +29,24 @@ FIGURE_SIZE = (13.333333333333334, 7.5)
 FIGURE_DPI = 180
 ATTRIBUTION_HEADING = "ATTRIBUTION CHECKLIST"
 FIGURE_WIDTH_RATIOS = (1.05, 0.95)
+FIGURE_HEIGHT_RATIOS = (0.78, 0.22)
 THUMBNAIL_GRID_SPACING = 0.0
+TRANSCRIPT_WRAP_WIDTH = 78
+TRANSCRIPT_MAX_LINES = 7
+TRANSCRIPT_FONT_SIZE = 9.2
+
+ABC_ATTRIBUTION_GROUPS = (
+    ("ATTRACT", "A / ATTRACT"),
+    ("BRAND", "B / BRAND"),
+    ("CONNECT", "C / CONNECT"),
+    ("DIRECT", "D / DIRECT"),
+    ("NONE", "E / EXTRA"),
+)
+
+ATTRIBUTION_SOURCE_GROUPS = (
+    ("LONG_FORM_ABCD", "LONG FORM ABCD"),
+    ("SHORTS", "SHORTS"),
+)
 
 SANS_FONT_FALLBACKS = [
     "figmaSans",
@@ -227,6 +244,31 @@ def transcript_snippet(
   return transcript or "No transcript available."
 
 
+def full_transcript_text(manifest: dict[str, Any]) -> str:
+  """Return the full-video transcript text from a preprocessor manifest."""
+  transcript_text = _read_text_path(manifest.get("transcript_path"))
+  if transcript_text:
+    return transcript_text
+
+  transcript = manifest.get("transcript")
+  if isinstance(transcript, str) and transcript.strip():
+    return transcript.strip()
+
+  segment_text = [
+      str(segment.get("text", "")).strip()
+      for segment in manifest.get("transcript_segments") or []
+      if str(segment.get("text", "")).strip()
+  ]
+  if segment_text:
+    return " ".join(segment_text)
+
+  first_5_text = _read_text_path(manifest.get("first_5_seconds_transcript_path"))
+  if first_5_text:
+    return first_5_text
+
+  return "No transcript available."
+
+
 def frame_entries_from_manifest(manifest: dict[str, Any]) -> list[dict[str, Any]]:
   """Return full-video frame entries labeled by sampled timestamp."""
   evidence = manifest.get("full_video_frame_evidence") or []
@@ -280,6 +322,7 @@ def load_feature_rows(assessment_path: str | Path) -> dict[str, list[tuple]]:
             feature.get("name", feature_result.get("name", "")),
             bool(feature_result.get("detected", False)),
             evidence_text,
+            feature.get("sub_category", feature_result.get("sub_category", "")),
         ))
     feature_rows[video_uri] = rows
 
@@ -322,7 +365,7 @@ def render_evidence_figure(
       2,
       2,
       width_ratios=FIGURE_WIDTH_RATIOS,
-      height_ratios=[0.84, 0.16],
+      height_ratios=FIGURE_HEIGHT_RATIOS,
       left=0.04,
       right=0.985,
       bottom=0.055,
@@ -392,13 +435,14 @@ def render_evidence_figure(
   )
   transcript_axis.text(
       0.0,
-      0.72,
-      "\n".join(textwrap.wrap(transcript_text, width=78))[:1200],
+      0.74,
+      format_transcript_block(transcript_text),
       transform=transcript_axis.transAxes,
       ha="left",
       va="top",
-      fontsize=10,
-      linespacing=1.12,
+      fontsize=TRANSCRIPT_FONT_SIZE,
+      linespacing=1.06,
+      clip_on=True,
   )
 
   _configure_text_axis(checklist_axis)
@@ -419,17 +463,13 @@ def render_evidence_figure(
   )
   checklist_font_size = _checklist_font_size(feature_rows)
   for column_index, lines in enumerate(checklist_columns):
-    checklist_axis.text(
+    _draw_checklist_column(
+        checklist_axis,
         column_index / len(checklist_columns),
         0.92,
-        "\n".join(lines),
-        transform=checklist_axis.transAxes,
-        ha="left",
-        va="top",
-        fontsize=checklist_font_size,
-        fontfamily="monospace",
-        linespacing=1.02,
-      )
+        lines,
+        checklist_font_size,
+    )
 
   fig.savefig(output_path, dpi=FIGURE_DPI, facecolor="white")
   fig.clear()
@@ -459,6 +499,23 @@ def format_feature_checklist(
         ).rstrip()
     )
   return "\n".join(output_lines)
+
+
+def format_transcript_block(
+    transcript_text: str,
+    wrap_width: int = TRANSCRIPT_WRAP_WIDTH,
+    max_lines: int = TRANSCRIPT_MAX_LINES,
+) -> str:
+  """Wrap full transcript text to fit inside the figure transcript block."""
+  text = " ".join(str(transcript_text).split()) or "No transcript available."
+  wrapped_lines = textwrap.wrap(text, width=wrap_width) or [text]
+  if len(wrapped_lines) <= max_lines:
+    return "\n".join(wrapped_lines)
+
+  truncated_lines = wrapped_lines[:max_lines]
+  tail_width = max(0, wrap_width - 3)
+  truncated_lines[-1] = truncated_lines[-1][:tail_width].rstrip() + "..."
+  return "\n".join(truncated_lines)
 
 
 def _flatten_selected_videos(
@@ -518,21 +575,128 @@ def _feature_checklist_columns(
   if not feature_rows:
     return [["No evaluated features found."]]
 
-  checklist_lines = []
+  source_columns = _source_feature_checklist_columns(feature_rows, frame_entries)
+  if source_columns:
+    return source_columns
+
+  checklist_lines = _grouped_feature_checklist_lines(feature_rows, frame_entries)
+  column_count = max(1, min(columns, len(checklist_lines)))
+  rows_per_column = math.ceil(len(checklist_lines) / column_count)
+  return [
+      checklist_lines[index : index + rows_per_column]
+      for index in range(0, len(checklist_lines), rows_per_column)
+  ]
+
+
+def _source_feature_checklist_columns(
+    feature_rows: list[tuple],
+    frame_entries: list[dict[str, Any]],
+) -> list[list[str]]:
+  columns = []
+  for source_key, source_label in ATTRIBUTION_SOURCE_GROUPS:
+    rows = [
+        row
+        for row in feature_rows
+        if _feature_source_key(row) == source_key
+    ]
+    if not rows:
+      continue
+    columns.append([
+        source_label,
+        *_grouped_feature_checklist_lines(rows, frame_entries),
+    ])
+  return columns
+
+
+def _grouped_feature_checklist_lines(
+    feature_rows: list[tuple],
+    frame_entries: list[dict[str, Any]],
+) -> list[str]:
+  grouped_rows = {group_key: [] for group_key, _ in ABC_ATTRIBUTION_GROUPS}
   for row in feature_rows:
+    group_key = _feature_group_key(row)
+    if group_key not in grouped_rows:
+      group_key = "NONE"
+    grouped_rows[group_key].append(row)
+
+  checklist_lines = []
+  for group_key, group_label in ABC_ATTRIBUTION_GROUPS:
+    rows = grouped_rows[group_key]
+    if not rows:
+      continue
+    checklist_lines.append(group_label)
+    for row in rows:
+      checklist_lines.append(_feature_checklist_line(row, frame_entries))
+  return checklist_lines
+
+
+def _draw_checklist_column(
+    checklist_axis,
+    x_position: float,
+    y_position: float,
+    lines: list[str],
+    font_size: float,
+) -> None:
+  line_step = font_size * 0.00212
+  for line in lines:
+    is_group_header = _is_attribution_group_header(line)
+    checklist_axis.text(
+        x_position,
+        y_position,
+        line,
+        transform=checklist_axis.transAxes,
+        ha="left",
+        va="top",
+        fontsize=font_size + 0.5 if is_group_header else font_size,
+        fontfamily="sans-serif" if is_group_header else "monospace",
+        fontweight="bold" if is_group_header else "normal",
+        linespacing=1.02,
+      )
+    y_position -= line_step * (line.count("\n") + 1)
+
+
+def _is_attribution_group_header(line: str) -> bool:
+  return line in {
+      *(group_label for _, group_label in ABC_ATTRIBUTION_GROUPS),
+      *(source_label for _, source_label in ATTRIBUTION_SOURCE_GROUPS),
+  }
+
+
+def _feature_source_key(row: tuple) -> str:
+  category = str(row[0]).strip() if row else ""
+  category = category.split(".")[-1].upper()
+  return category
+
+
+def _feature_checklist_line(
+    row: tuple,
+    frame_entries: list[dict[str, Any]],
+) -> str:
     category, feature_id, name, detected = row[:4]
     evidence_text = row[4] if len(row) > 4 else ""
     mark = "[x]" if detected else "[ ]"
     refs = _frame_refs_for_feature(bool(detected), str(evidence_text), frame_entries)
     label = _shorten_feature_label(str(name or feature_id))
-    checklist_lines.append(f"{mark} {label}\n    {refs}")
+    return f"{mark} {label}\n    {refs}"
 
-  columns = max(1, min(columns, len(checklist_lines)))
-  rows_per_column = math.ceil(len(checklist_lines) / columns)
-  return [
-      checklist_lines[index : index + rows_per_column]
-      for index in range(0, len(checklist_lines), rows_per_column)
-  ]
+
+def _feature_group_key(row: tuple) -> str:
+  sub_category = str(row[5]).strip() if len(row) > 5 else ""
+  sub_category = sub_category.split(".")[-1].upper()
+  if sub_category:
+    return sub_category
+
+  feature_id = str(row[1]).strip().lower() if len(row) > 1 else ""
+  prefix_to_group = {
+      "a_": "ATTRACT",
+      "b_": "BRAND",
+      "c_": "CONNECT",
+      "d_": "DIRECT",
+  }
+  for prefix, group_key in prefix_to_group.items():
+    if feature_id.startswith(prefix):
+      return group_key
+  return "NONE"
 
 
 def _frame_refs_for_feature(
@@ -572,11 +736,26 @@ def _timestamps_from_text(text: str) -> list[float]:
   return timestamps
 
 
-def _shorten_feature_label(label: str, max_chars: int = 22) -> str:
+def _shorten_feature_label(label: str, max_chars: int = 24) -> str:
   label = " ".join(label.split())
+  label = _compact_feature_label_suffixes(label)
   if len(label) <= max_chars:
     return label
   return label[: max_chars - 1].rstrip() + "."
+
+
+def _compact_feature_label_suffixes(label: str) -> str:
+  replacements = (
+      ("(Speech) (First 5 seconds)", "[Sp 5s]"),
+      ("(Speech)", "[Sp]"),
+      ("(Text) (First 5 seconds)", "[Txt 5s]"),
+      ("(Text)", "[Txt]"),
+      ("(First 5 seconds)", "[5s]"),
+  )
+  compact_label = label
+  for source, replacement in replacements:
+    compact_label = compact_label.replace(source, replacement)
+  return compact_label
 
 
 def _compact_title(title: str) -> str:
