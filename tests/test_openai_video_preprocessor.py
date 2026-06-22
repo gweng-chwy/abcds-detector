@@ -108,8 +108,8 @@ def test_build_cache_key_returns_stable_sha256_prefix():
   assert len(build_cache_key(uri)) == 16
 
 
-def test_full_video_frame_timestamps_cover_duration_at_sample_rate(tmp_path):
-  """Full-video frame timestamps sample the whole video at the configured rate."""
+def test_full_video_frame_timestamps_are_uniform_across_duration(tmp_path):
+  """Full-video frame timestamps are evenly distributed across the video."""
   preprocessor = VideoPreprocessor(
       cache_dir=str(tmp_path / "cache"),
       max_frames=4,
@@ -117,23 +117,11 @@ def test_full_video_frame_timestamps_cover_duration_at_sample_rate(tmp_path):
       openai_service=object(),
   )
 
-  assert preprocessor._full_video_timestamps(10.0) == [
-      0.0,
-      1.0,
-      2.0,
-      3.0,
-      4.0,
-      5.0,
-      6.0,
-      7.0,
-      8.0,
-      9.0,
-      10.0,
-  ]
+  assert preprocessor._full_video_timestamps(10.0) == [0.0, 3.33, 6.67, 10.0]
 
 
-def test_full_video_frame_timestamps_are_not_capped_by_max_frames(tmp_path):
-  """The first-5-second max frame cap does not truncate full-video evidence."""
+def test_full_video_frame_timestamps_use_max_frames_not_sample_rate(tmp_path):
+  """Full-video evidence uses the configured max frame count."""
   preprocessor = VideoPreprocessor(
       cache_dir=str(tmp_path / "cache"),
       max_frames=2,
@@ -141,7 +129,7 @@ def test_full_video_frame_timestamps_are_not_capped_by_max_frames(tmp_path):
       openai_service=object(),
   )
 
-  assert preprocessor._full_video_timestamps(5.0) == [0.0, 2.0, 4.0, 5.0]
+  assert preprocessor._full_video_timestamps(5.0) == [0.0, 5.0]
 
 
 def test_first_5s_frame_timestamps_are_capped_by_duration(tmp_path):
@@ -164,17 +152,25 @@ def test_first_5s_frame_timestamps_are_capped_by_duration(tmp_path):
   ]
 
 
-def test_frame_timestamps_fall_back_to_zero_for_empty_videos(tmp_path):
-  """Timestamp helpers always return zero for empty videos."""
+def test_frame_timestamps_fall_back_to_zero_for_empty_or_single_frame(tmp_path):
+  """Timestamp helpers always return zero for empty videos or single-frame caps."""
   zero_duration_preprocessor = VideoPreprocessor(
       cache_dir=str(tmp_path / "cache"),
       max_frames=4,
       frame_sample_rate=2.0,
       openai_service=object(),
   )
+  single_frame_preprocessor = VideoPreprocessor(
+      cache_dir=str(tmp_path / "cache"),
+      max_frames=1,
+      frame_sample_rate=2.0,
+      openai_service=object(),
+  )
 
   assert zero_duration_preprocessor._full_video_timestamps(0.0) == [0.0]
   assert zero_duration_preprocessor._first_5s_timestamps(-1.0) == [0.0]
+  assert single_frame_preprocessor._full_video_timestamps(10.0) == [0.0]
+  assert single_frame_preprocessor._first_5s_timestamps(10.0) == [0.0]
 
 
 def test_frame_extraction_retries_slightly_before_missing_endpoint(
@@ -490,7 +486,7 @@ def test_manifest_setting_mismatch_rebuilds_cache(tmp_path, monkeypatch):
 
   assert [cmd[0] for cmd in commands].count("ffprobe") == 1
   assert result.transcript == "rebuilt full"
-  assert len(result.full_video_frame_evidence) == 5
+  assert len(result.full_video_frame_evidence) == 2
 
 
 def test_missing_manifest_transcript_rebuilds_cache(tmp_path, monkeypatch):
@@ -732,7 +728,7 @@ def test_local_preprocessing_extracts_first_5s_audio_and_transcript(
       "default=noprint_wrappers=1:nokey=1",
       str(video_path),
   ]]
-  assert len(frame_commands) == 12
+  assert len(frame_commands) == 8
   assert all("-ss" in cmd for cmd in frame_commands)
   assert all(cmd[-1].endswith(".jpg") for cmd in frame_commands)
   assert audio_commands == [
@@ -778,10 +774,6 @@ def test_local_preprocessing_extracts_first_5s_audio_and_transcript(
       str(video_cache_dir / "frames" / "full" / "frame_0002.jpg"),
       str(video_cache_dir / "frames" / "full" / "frame_0003.jpg"),
       str(video_cache_dir / "frames" / "full" / "frame_0004.jpg"),
-      str(video_cache_dir / "frames" / "full" / "frame_0005.jpg"),
-      str(video_cache_dir / "frames" / "full" / "frame_0006.jpg"),
-      str(video_cache_dir / "frames" / "full" / "frame_0007.jpg"),
-      str(video_cache_dir / "frames" / "full" / "frame_0008.jpg"),
   ]
   assert result.first_5_seconds_frames == [
       str(video_cache_dir / "frames" / "first_5s" / "frame_0001.jpg"),
@@ -800,7 +792,7 @@ def test_local_preprocessing_extracts_first_5s_audio_and_transcript(
   assert result.first_5_seconds_transcript_available is True
   assert [
       frame.timestamp_seconds for frame in result.full_video_frame_evidence
-  ] == [0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 12.5]
+  ] == [0.0, 4.17, 8.33, 12.5]
   assert [
       frame.timestamp_seconds for frame in result.first_5_seconds_frame_evidence
   ] == [0.0, 2.0, 4.0, 5.0]
@@ -978,7 +970,13 @@ def test_youtube_preprocessing_reuses_cached_source_without_refresh(
       openai_service=FakeOpenAIService(),
   ).preprocess(source)
 
-  assert [cmd[0] for cmd in commands] == ["ffprobe"] + ["ffmpeg"] * 12
+  assert [cmd[0] for cmd in commands] == [
+      "ffprobe",
+      "ffmpeg",
+      "ffmpeg",
+      "ffmpeg",
+      "ffmpeg",
+  ]
   assert result.source.local_path == str(cached_source_path)
   assert result.transcript == "cached source transcript"
 
@@ -1441,10 +1439,7 @@ def test_audio_extraction_failure_does_not_fail_preprocessing(tmp_path, monkeypa
 
   video_cache_dir = cache_dir / build_cache_key(str(video_path))
   assert result.full_video_frames == [
-      str(video_cache_dir / "frames" / "full" / "frame_0001.jpg"),
-      str(video_cache_dir / "frames" / "full" / "frame_0002.jpg"),
-      str(video_cache_dir / "frames" / "full" / "frame_0003.jpg"),
-      str(video_cache_dir / "frames" / "full" / "frame_0004.jpg"),
+      str(video_cache_dir / "frames" / "full" / "frame_0001.jpg")
   ]
   assert result.first_5_seconds_frames == [
       str(video_cache_dir / "frames" / "first_5s" / "frame_0001.jpg")

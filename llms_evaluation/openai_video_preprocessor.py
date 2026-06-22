@@ -11,7 +11,7 @@ import models
 
 _SUBPROCESS_TIMEOUT_SECONDS = 300
 _MANIFEST_SCHEMA_VERSION = 1
-_EXTRACTION_STRATEGY_VERSION = "openai-evidence-v2"
+_EXTRACTION_STRATEGY_VERSION = "openai-evidence-v1"
 _MANIFEST_FILENAME = "preprocess_manifest.json"
 _FRAME_RETRY_OFFSETS_SECONDS = (0.0, 0.05, 0.25, 0.5, 1.0)
 
@@ -417,8 +417,11 @@ class VideoPreprocessor:
     return float(completed.stdout.strip())
 
   def _full_video_timestamps(self, duration_seconds: float) -> list[float]:
-    """Return sampled frame timestamps across the full video."""
-    return self._sampled_timestamps(duration_seconds)
+    """Return evenly spaced frame timestamps across the full video."""
+    if duration_seconds <= 0 or self.max_frames <= 1:
+      return [0.0]
+    step = duration_seconds / (self.max_frames - 1)
+    return [round(step * index, 2) for index in range(self.max_frames)]
 
   def _first_5s_timestamps(self, duration_seconds: float) -> list[float]:
     """Return sampled frame timestamps within the first five seconds."""
